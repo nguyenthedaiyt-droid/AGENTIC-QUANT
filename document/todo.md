@@ -148,12 +148,12 @@
 
 ### 1.3 Tick Receiver — TradingView Webhook 🟡
 
-- [ ] **1.3.1** Viết `core/ingestion/tv_webhook.py`:
+- [x] **1.3.1** Viết `core/ingestion/tv_webhook.py`:
   - HTTP server (aiohttp) lắng nghe POST `/webhook/tv` tại port 8080
   - HMAC-SHA256 signature validation từ header `X-TV-Signature`
   - Parse TVAlert JSON → chuẩn hóa thành OHLCVRecord
 - [ ] **1.3.2** Unit test: valid webhook, invalid signature, malformed JSON
-- [ ] **1.3.3** Rate limiting: tối đa 100 requests/phút (bảo vệ DoS)
+- [x] **1.3.3** Rate limiting: tối đa 100 requests/phút (bảo vệ DoS)
 
 ### 1.4 OHLCV Aggregator 🔴
 
@@ -197,21 +197,21 @@
 
 ### 1.7 Backtest Data Loader 🟡
 
-- [ ] **1.7.1** Viết `core/ingestion/historical_tick_loader.py`:
+- [x] **1.7.1** Viết `core/ingestion/historical_tick_loader.py`:
   - Đọc file Parquet từ `data/historical_ticks/{symbol}/{year}/`
   - Iterator theo timestamp tăng dần
   - Giả lập tick như real-time (replay mode)
-- [ ] **1.7.2** Cấu trúc Parquet schema: `timestamp_us, bid, ask, last, volume, flags`
-- [ ] **1.7.3** Script download/convert dữ liệu từ MT5 history: `scripts/export_ticks_mt5.py`
-- [ ] **1.7.4** Validate: verify không có tick nào bị thiếu trong giờ market open
+- [x] **1.7.2** Cấu trúc Parquet schema: `timestamp_us, bid, ask, last, volume, flags`
+- [x] **1.7.3** Script download/convert dữ liệu từ MT5 history: `scripts/export_ticks_mt5.py`
+- [x] **1.7.4** Validate: verify không có tick nào bị thiếu trong giờ market open
 
 ### 1.8 Edge Cases & Fail-safes 🟡
 
 - [x] **1.8.1** D.1: Mất kết nối ZeroMQ → `STALENESS_ALERT` flag, reconnect backoff
 - [x] **1.8.2** D.2: Phát hiện News Spike (`|Δprice| > 3×ATR_5min`) → không update CVD, set `SPIKE_REGIME`
-- [ ] **1.8.3** D.3: Timeframe Desync → nội suy tuyến tính (≤5 nến thiếu) hoặc mark UNRELIABLE
-- [ ] **1.8.4** D.4: ITQ Queue Overflow → Tick Sampling với K động
-- [ ] **1.8.5** Integration test toàn bộ Module 1: từ tick → USV hoàn chỉnh
+- [x] **1.8.3** D.3: Timeframe Desync → nội suy tuyến tính (≤5 nến thiếu) hoặc mark UNRELIABLE
+- [x] **1.8.4** D.4: ITQ Queue Overflow → Tick Sampling với K động
+- [x] **1.8.5** Integration test toàn bộ Module 1: từ tick → USV hoàn chỉnh
 
 ---
 
