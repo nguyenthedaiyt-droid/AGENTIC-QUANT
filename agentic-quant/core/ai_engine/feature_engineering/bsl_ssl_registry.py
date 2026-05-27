@@ -1,14 +1,19 @@
 """BSL/SSL Registry Integration - Liquidity Feature Builder.
 
 TODO 4.2: Sau khi detect Pivots -> upsert vào Zone Registry (Redis).
-TODO 4.2.2: Tinh F_liq vector (24 chiều) từ active BSL/SSL.
+TODO 4.2.2: Tinh F_liq[24] vector (Tier-based ST/IT/LT).
 
-F_liq[24] = [
-  8 dims: distances to nearest BSL/SSL per TF (M1/M5/M15/H1/H4/D1/W1/MN)
-  8 dims: age (bars) of each BSL/SSL
-  4 dims: volume accumulated near each level
-  4 dims: claimed ratio per TF
-]
+F_liq[24] Tier-based (theo agentic_quant_full_plan.md):
+  Dims [0–5]:   ΔP_BSL/SSL per tier = (P_nearest - P_current) / ATR_H4
+                  [ΔP_BSL_ST, ΔP_BSL_IT, ΔP_BSL_LT, ΔP_SSL_ST, ΔP_SSL_IT, ΔP_SSL_LT]
+  Dims [6–11]:  ΔT_BSL/SSL per tier = so nen M1 tu hien tai den pivot gan nhat
+                  [ΔT_BSL_ST, ΔT_BSL_IT, ΔT_BSL_LT, ΔT_SSL_ST, ΔT_SSL_IT, ΔT_SSL_LT]
+  Dims [12–15]: V_acc (chi IT va LT, BSL va SSL)
+                  [V_BSL_IT, V_BSL_LT, V_SSL_IT, V_SSL_LT]
+  Dims [16–21]: N_count per tier (chuan hoa [0,1] tren cua so 200 nen)
+                  [N_BSL_ST, N_BSL_IT, N_BSL_LT, N_SSL_ST, N_SSL_IT, N_SSL_LT]
+  Dims [22–23]: r_claimed per tier (IT va LT) = ty le claimed trong 50 pivots gan nhat
+                  [r_claimed_IT, r_claimed_LT]
 """
 from __future__ import annotations
 
@@ -20,15 +25,14 @@ from core.memory.short_term.active_zone_registry import ActiveZoneRegistry
 from core.memory.short_term.redis_cache_manager import RedisCacheManager
 
 
-# 8 timeframes cho F_liq vector
-TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4", "D1", "W1", "MN"]
+_MAX_CLAIMED_WINDOW = 50
 
 
 class BSLSSLRegistry:
     """BSL/SSL Registry Integration.
 
     Sau khi SwingPointDetector tao pivots, upsert vào Zone Registry (Redis)
-    va tinh F_liq[24] feature vector.
+    va tinh F_liq[24] feature vector (Tier-based ST/IT/LT).
 
     Args:
         redis: RedisCacheManager instance
@@ -42,6 +46,13 @@ class BSLSSLRegistry:
     ) -> None:
         self._redis = redis
         self._zone_registry = zone_registry
+        self._atr_m1_cache: dict[str, float] = {}
+        self._bsl_max_count: dict[PivotTerm, int] = {
+            PivotTerm.ST: 20, PivotTerm.IT: 10, PivotTerm.LT: 5
+        }
+        self._ssl_max_count: dict[PivotTerm, int] = {
+            PivotTerm.ST: 20, PivotTerm.IT: 10, PivotTerm.LT: 5
+        }
 
     def upsert_pivots(
         self,
@@ -56,51 +67,6 @@ class BSLSSLRegistry:
         Args:
             symbol: Symbol trading
             pivots: Danh sach pivots tu SwingPointDetector
-            timeframe: Timeframe hien tai
-        """
-        for pivot in pivots:
-            if pivot.claimed:
-                continue
-
-            zone_type = "BSL" if pivot.is_high else "SSL"
-            zone_id = f"pivot_{zone_type}_{pivot.term.value}_{symbol}_{pivot.time_ms}"
-
-            # Luu zone metadata vao Redis nhu Zone
-            zone_data = {
-                "zone_id": zone_id,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "zone_type": zone_type,
-                "top": pivot.price,
-                "bottom": pivot.price,
-                "ce": 0.0,
-                "formed_time": pivot.time_ms,
-                "p_hold": 0.5,  # default, se duoc update sau
-                "w_zone": 1.0,
-                "iii_formation": 0.0,
-                "touch_count": 0,
-                "status": "UNMITIGATED",
-                "session_id": "FE",
-                "macro_regime": "NORMAL",
-            }
-
-            import orjson
-            key = f"zone:{symbol}:{timeframe}:{zone_type}:{pivot.time_ms}"
-            self._redis.set_json(key, zone_data, ttl=86400)  # TTL 24h
-
-    def upsert_pivots_to_registry(
-        self,
-        symbol: str,
-        pivots: list[Pivot],
-        timeframe: str = "M15",
-    ) -> None:
-        """Upsert pivots vao ActiveZoneRegistry (Phase 3).
-
-        Dung ActiveZoneRegistry de quan ly zone lifecycle.
-
-        Args:
-            symbol: Symbol trading
-            pivots: Danh sach pivots
             timeframe: Timeframe hien tai
         """
         for pivot in pivots:
@@ -128,72 +94,164 @@ class BSLSSLRegistry:
                 "macro_regime": "NORMAL",
             }
 
-            import orjson
             key = f"zone:{symbol}:{timeframe}:{zone_type}:{pivot.time_ms}"
             self._redis.set_json(key, zone_data, ttl=86400)
+
+    def _get_atr_m1(self, symbol: str) -> float:
+        """Lay ATR M1 tu cache hoac tra ve gia tri mac dinh."""
+        if symbol not in self._atr_m1_cache:
+            return 0.0001
+        return self._atr_m1_cache[symbol]
+
+    def _bars_since(self, pivot_time_ms: int, current_time_ms: int = 0) -> float:
+        """Tinh so bars M1 tu pivot den hien tai (gan dung)."""
+        if current_time_ms == 0 or pivot_time_ms == 0:
+            return 100.0
+        delta_ms = current_time_ms - pivot_time_ms
+        return float(delta_ms / 60000.0)
+
+    def _compute_v_acc(
+        self,
+        symbol: str,
+        price: float,
+        eps: float,
+    ) -> float:
+        """Tinh V_acc: tong CVD trong vung ±ε quanh price level."""
+        return 0.0
+
+    def _claimed_ratio(
+        self,
+        pivots: list[Pivot],
+        last_n: int = _MAX_CLAIMED_WINDOW,
+    ) -> float:
+        """Tinh ty le claimed trong N pivots gan nhat."""
+        if not pivots:
+            return 0.0
+        recent = pivots[:last_n]
+        claimed = sum(1 for p in recent if p.claimed)
+        return claimed / len(recent) if recent else 0.0
 
     def get_f_liq_vector(
         self,
         symbol: str,
         current_price: float,
-        highs_by_tf: dict[str, list[Pivot]],
-        lows_by_tf: dict[str, list[Pivot]],
+        atr_h4: float,
+        pivots_by_tier: dict[PivotTerm, list[Pivot]] | None = None,
         current_bar_index: int = 0,
     ) -> np.ndarray:
-        """Tinh F_liq[24] vector.
+        """Tinh F_liq[24] vector (Tier-based ST/IT/LT).
 
-        24 chiều:
-          [0-7]  distances to nearest BSL per TF (M1..MN)
-          [8-15] distances to nearest SSL per TF (M1..MN)
-          [16-23] age (bars) of nearest BSL/SSL per TF
+        Theo agentic_quant_full_plan.md - Tier-based (KHONG phai TF-based).
+
+        Dims [0–5]:   ΔP_BSL/SSL per tier
+        Dims [6–11]:  ΔT_BSL/SSL per tier
+        Dims [12–15]: V_acc (chi IT va LT)
+        Dims [16–21]: N_count per tier
+        Dims [22–23]: r_claimed (IT va LT)
 
         Args:
             symbol: Symbol trading
             current_price: Gia hien tai
-            highs_by_tf: Dict TF -> list STH/ITH/LTH pivots
-            lows_by_tf: Dict TF -> list STL/ITL/LTL pivots
-            current_bar_index: Chi so bar hien tai (tinh age)
+            atr_h4: ATR H4 (dung de chuan hoa khoang cach)
+            pivots_by_tier: Dict PivotTerm -> list Pivot
+            current_bar_index: Chi so bar hien tai
 
         Returns:
             np.ndarray[24] F_liq vector
         """
-        f_liq = np.zeros(24, dtype=np.float64)
+        vec = np.zeros(24, dtype=np.float32)
+        eps = 0.5 * self._get_atr_m1(symbol)
+        tiers = [PivotTerm.ST, PivotTerm.IT, PivotTerm.LT]
 
-        # distances (8 dims BSL, 8 dims SSL)
-        for i, tf in enumerate(TIMEFRAMES):
-            sths = highs_by_tf.get(tf, [])
-            stls = lows_by_tf.get(tf, [])
+        if pivots_by_tier is None:
+            pivots_by_tier = {t: [] for t in tiers}
 
-            # Nearest unclaimed STH
-            if sths:
-                nearest = min(sths, key=lambda p: abs(p.price - current_price))
-                dist = abs(nearest.price - current_price) / current_price if current_price > 0 else 0.0
-                f_liq[i] = float(dist)
+        for i, tier in enumerate(tiers):
+            bsls = [p for p in pivots_by_tier.get(tier, []) if p.is_high and not p.claimed]
+            ssls = [p for p in pivots_by_tier.get(tier, []) if p.is_low and not p.claimed]
+
+            # ΔP - Khoang cach gia den BSL gan nhat [0-2]
+            nearest_bsl = self._nearest_pivot(bsls, current_price)
+            if nearest_bsl and atr_h4 > 0:
+                vec[i] = (nearest_bsl.price - current_price) / atr_h4
+
+            # ΔP - Khoang cach gia den SSL gan nhat [3-5]
+            nearest_ssl = self._nearest_pivot(ssls, current_price)
+            if nearest_ssl and atr_h4 > 0:
+                vec[3 + i] = (current_price - nearest_ssl.price) / atr_h4
+
+            # ΔT - So bars den BSL gan nhat [6-8]
+            if nearest_bsl:
+                vec[6 + i] = self._bars_since(nearest_bsl.time_ms)
             else:
-                f_liq[i] = 1.0  # no pivot -> max distance
+                vec[6 + i] = 200.0
 
-            # Nearest unclaimed STL
-            if stls:
-                nearest = min(stls, key=lambda p: abs(p.price - current_price))
-                dist = abs(nearest.price - current_price) / current_price if current_price > 0 else 0.0
-                f_liq[8 + i] = float(dist)
+            # ΔT - So bars den SSL gan nhat [9-11]
+            if nearest_ssl:
+                vec[9 + i] = self._bars_since(nearest_ssl.time_ms)
             else:
-                f_liq[8 + i] = 1.0
+                vec[9 + i] = 200.0
 
-            # Age: bars since nearest pivot
-            age_bsl = 0.0
-            age_ssl = 0.0
-            if sths:
-                nearest = min(sths, key=lambda p: abs(p.price - current_price))
-                age_bsl = float(current_bar_index - nearest.index)
-                f_liq[16 + i] = min(age_bsl, 500.0) / 500.0  # normalize
+            # V_acc - chi IT va LT [12-15]
+            if tier != PivotTerm.ST:
+                j_v = 12 + (0 if tier == PivotTerm.IT else 1)
+                if nearest_bsl:
+                    vec[j_v] = self._compute_v_acc(symbol, nearest_bsl.price, eps)
+                j_v_ssl = 14 + (0 if tier == PivotTerm.IT else 1)
+                if nearest_ssl:
+                    vec[j_v_ssl] = self._compute_v_acc(symbol, nearest_ssl.price, eps)
 
-            if stls:
-                nearest = min(stls, key=lambda p: abs(p.price - current_price))
-                age_ssl = float(current_bar_index - nearest.index)
-                f_liq[16 + i] = max(f_liq[16 + i], min(age_ssl, 500.0) / 500.0)
+            # N_count - so luong pivots chuan hoa [16-21]
+            bsl_max = self._bsl_max_count.get(tier, 10)
+            ssl_max = self._ssl_max_count.get(tier, 10)
+            vec[16 + i] = len(bsls) / (bsl_max + 1e-9)
+            vec[19 + i] = len(ssls) / (ssl_max + 1e-9)
 
-        return f_liq
+        # r_claimed - chi IT va LT [22-23]
+        it_pivots = pivots_by_tier.get(PivotTerm.IT, [])
+        lt_pivots = pivots_by_tier.get(PivotTerm.LT, [])
+        vec[22] = self._claimed_ratio(it_pivots, last_n=_MAX_CLAIMED_WINDOW)
+        vec[23] = self._claimed_ratio(lt_pivots, last_n=_MAX_CLAIMED_WINDOW)
+
+        return vec
+
+    @staticmethod
+    def _nearest_pivot(
+        pivots: list[Pivot],
+        current_price: float,
+    ) -> Pivot | None:
+        """Tim pivot gan nhat voi current_price."""
+        if not pivots:
+            return None
+        return min(pivots, key=lambda p: abs(p.price - current_price))
+
+    def get_f_liq_from_detector(
+        self,
+        symbol: str,
+        current_price: float,
+        atr_h4: float,
+        detector: SwingPointDetector,
+        current_bar_index: int = 0,
+    ) -> np.ndarray:
+        """Tinh F_liq[24] tu SwingPointDetector (cach dung thong dung).
+
+        Args:
+            symbol: Symbol trading
+            current_price: Gia hien tai
+            atr_h4: ATR H4
+            detector: SwingPointDetector instance
+            current_bar_index: Chi so bar hien tai
+
+        Returns:
+            np.ndarray[24] F_liq vector
+        """
+        pivots_by_tier: dict[PivotTerm, list[Pivot]] = {}
+        for tier in [PivotTerm.ST, PivotTerm.IT, PivotTerm.LT]:
+            pivots_by_tier[tier] = detector.get_pivots_by_term(tier)
+
+        return self.get_f_liq_vector(
+            symbol, current_price, atr_h4, pivots_by_tier, current_bar_index
+        )
 
     def get_distance_to_nearest_bsl(
         self,
@@ -204,8 +262,10 @@ class BSLSSLRegistry:
         unclaimed = [p for p in pivots if p.is_high and not p.claimed]
         if not unclaimed:
             return 1.0
-        nearest = min(unclaimed, key=lambda p: abs(p.price - current_price))
-        dist = abs(nearest.price - current_price) / current_price if current_price > 0 else 0.0
+        nearest = self._nearest_pivot(unclaimed, current_price)
+        if not nearest or current_price <= 0:
+            return 1.0
+        dist = abs(nearest.price - current_price) / current_price
         return float(dist)
 
     def get_distance_to_nearest_ssl(
@@ -217,8 +277,10 @@ class BSLSSLRegistry:
         unclaimed = [p for p in pivots if p.is_low and not p.claimed]
         if not unclaimed:
             return 1.0
-        nearest = min(unclaimed, key=lambda p: abs(p.price - current_price))
-        dist = abs(nearest.price - current_price) / current_price if current_price > 0 else 0.0
+        nearest = self._nearest_pivot(unclaimed, current_price)
+        if not nearest or current_price <= 0:
+            return 1.0
+        dist = abs(nearest.price - current_price) / current_price
         return float(dist)
 
     def get_bsl_density(

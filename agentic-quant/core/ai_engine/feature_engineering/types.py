@@ -358,3 +358,33 @@ class FeatureVectors:
     f_agg: list[float]     # 16 dims - aggregated
     f_liq: list[float]     # 24 dims - liquidity
     d_strength: list[float]  # 5 dims - displacement configs
+
+
+@dataclass
+class FeatureEngineeringConfig:
+    """Config tong hop cho FeatureEngineering (tu agentic_quant_full_plan.md)."""
+    displacement: DisplacementConfig = field(default_factory=DisplacementConfig)
+    fvg_merge_vi: bool = True
+    fvg_max_count: int = 5
+    fvg_displacement_level: int = 2
+    eq_tolerance: float = 0.0005
+    ob_atr_window: int = 14
+    news_guardrail_active: bool = False
+    session_ltf_weight: float = 1.0
+    session_htf_weight: float = 1.0
+    mitigated_type: MitigationType = MitigationType.WICK_FILLED
+
+
+@dataclass
+class FeatureOutput:
+    """Output cua FeatureEngineeringPipeline."""
+    symbol: str = ""
+    timeframe: str = ""
+    swing_points: list = field(default_factory=list)
+    structure_map: StructureMap | None = None
+    fvg_collection: FVGCollection | None = None
+    equal_levels: list = field(default_factory=list)
+    f_struct: "np.ndarray | None" = None  # [64]
+    f_agg: "np.ndarray | None" = None    # [16]
+    f_liq: "np.ndarray | None" = None    # [24]
+    d_strength: "np.ndarray | None" = None  # [5]

@@ -27,6 +27,7 @@ from core.ai_engine.feature_engineering.types import (
     ImbalanceType,
     EqualLevel,
     FeatureVectors,
+    FeatureEngineeringConfig,
 )
 from core.ai_engine.feature_engineering.bsl_ssl_registry import BSLSSLRegistry
 from core.ai_engine.feature_engineering.ict_structure_mapper import ICTStructureMapper
@@ -79,158 +80,155 @@ class SymbolicFeatureMap:
     atr: float = 0.0
 
     def to_f_struct(self) -> np.ndarray:
-        """Convert sang F_struct[64]."""
+        """Convert sang F_struct[64] theo agentic_quant_full_plan.md.
+
+        Dims [0–23]:  F_liq[24] (Tier-based ST/IT/LT)
+        Dims [24–39]: Structure events (16 dims)
+        Dims [40–55]: FVG/OB metrics (16 dims)
+        Dims [56–63]: EQ status (8 dims)
+        """
         vec = np.zeros(64, dtype=np.float64)
         idx = 0
 
-        # [0-23] F_liq[24]
+        # [0-23] F_liq[24] - da duoc populate tu SymbolicFeatureMap.f_liq
         if self.f_liq is not None and len(self.f_liq) == 24:
             vec[0:24] = self.f_liq
         idx = 24
 
-        # [24-31] Structure events (8 dims)
-        vec[idx] = float(self.mss_bullish_count)
-        idx += 1
-        vec[idx] = float(self.mss_bearish_count)
-        idx += 1
-        vec[idx] = float(self.bos_bullish_count)
-        idx += 1
-        vec[idx] = float(self.bos_bearish_count)
-        idx += 1
-        vec[idx] = self.structure_score
-        idx += 1
-        vec[idx] = float(self.mss_bullish_count - self.mss_bearish_count)  # bias
-        idx += 1
-        vec[idx] = float(self.bos_bullish_count - self.bos_bearish_count)  # bias
-        idx += 1
-        vec[idx] = 1.0 if self.structure_score > 0 else 0.0  # bullish context
-        idx += 1
+        # [24-39] Structure events (16 dims)
+        # MSS_bull_count, MSS_bear_count, BOS_bull_count, BOS_bear_count
+        vec[idx] = float(self.mss_bullish_count); idx += 1
+        vec[idx] = float(self.mss_bearish_count); idx += 1
+        vec[idx] = float(self.bos_bullish_count); idx += 1
+        vec[idx] = float(self.bos_bearish_count); idx += 1
 
-        # [32-47] FVG/OB metrics (16 dims)
-        vec[idx] = float(self.fvg_bullish_active)
-        idx += 1
-        vec[idx] = float(self.fvg_bearish_active)
-        idx += 1
-        vec[idx] = float(self.fvg_mitigated)
-        idx += 1
-        vec[idx] = float(self.ifvg_active)
-        idx += 1
-        vec[idx] = float(self.ob_bullish_active)
-        idx += 1
-        vec[idx] = float(self.ob_bearish_active)
-        idx += 1
-        vec[idx] = self.fvg_avg_strength
-        idx += 1
-        vec[idx] = self.fvg_avg_range
-        idx += 1
-        vec[idx] = float(self.zone_premium_count)
-        idx += 1
-        vec[idx] = float(self.zone_discount_count)
-        idx += 1
-        # Normalized FVG density
-        total_fvg = self.fvg_bullish_active + self.fvg_bearish_active + 1
-        vec[idx] = self.fvg_bullish_active / total_fvg
-        idx += 1
-        vec[idx] = float(self.fvg_mitigated) / max(self.fvg_bullish_active + self.fvg_bearish_active, 1)
-        idx += 1
-        # FVG position relative to price
-        if self.current_price > 0 and self.equilibrium > 0:
-            price_ratio = (self.current_price - self.equilibrium) / self.equilibrium
-            vec[idx] = float(price_ratio)
-            idx += 1
-        else:
-            idx += 1
-        # Unmitigated ratio
+        # last_MSS_strength, last_MSS_bars_ago, HTF_trend_H4, HTF_trend_H1
+        vec[idx] = self.structure_score; idx += 1
+        vec[idx] = 0.0; idx += 1  # bars_ago - can tracking
+        vec[idx] = 0.0; idx += 1  # HTF_trend_H4 - can HTF data
+        vec[idx] = 0.0; idx += 1  # HTF_trend_H1
+
+        # fib_382_dist, fib_618_dist, eq_dist, premium_flag, discount_flag
+        vec[idx] = 0.0; idx += 1  # fib_382_dist
+        vec[idx] = 0.0; idx += 1  # fib_618_dist
+        eq_dist = (self.current_price - self.equilibrium) / (self.equilibrium + 1e-9) if self.equilibrium > 0 else 0.0
+        vec[idx] = eq_dist; idx += 1
+        vec[idx] = 1.0 if eq_dist > 0 else 0.0; idx += 1  # premium_flag
+        vec[idx] = 1.0 if eq_dist < 0 else 0.0; idx += 1  # discount_flag
+
+        # structure_alignment_HTF, structure_alignment_MTF, reserved
+        vec[idx] = self.structure_score / max(self.mss_bullish_count + self.mss_bearish_count, 1); idx += 1
+        vec[idx] = self.structure_score / max(self.bos_bullish_count + self.bos_bearish_count, 1); idx += 1
+        idx += 1  # reserved
+        idx = 40
+
+        # [40-55] FVG/OB metrics (16 dims)
+        # fvg_bull_count, fvg_bear_count, nearest_fvg_dist, nearest_fvg_strength
+        vec[idx] = float(self.fvg_bullish_active); idx += 1
+        vec[idx] = float(self.fvg_bearish_active); idx += 1
+        vec[idx] = 0.0; idx += 1  # nearest_fvg_dist - can tracking
+        vec[idx] = self.fvg_avg_strength; idx += 1
+
+        # nearest_fvg_ce, fvg_p_hold, ob_bull_count, ob_bear_count
+        vec[idx] = 0.0; idx += 1  # nearest_fvg_ce - can tracking
+        vec[idx] = 0.5; idx += 1  # fvg_p_hold - default
+        vec[idx] = float(self.ob_bullish_active); idx += 1
+        vec[idx] = float(self.ob_bearish_active); idx += 1
+
+        # nearest_ob_dist, ob_p_hold, ifvg_count, mitigation_rate_last20
+        vec[idx] = 0.0; idx += 1  # nearest_ob_dist
+        vec[idx] = 0.5; idx += 1  # ob_p_hold
+        vec[idx] = float(self.ifvg_active); idx += 1
         total = self.fvg_bullish_active + self.fvg_bearish_active + self.fvg_mitigated + 1
-        vec[idx] = (self.fvg_bullish_active + self.fvg_bearish_active) / total
-        idx += 1
-        # Bull/Bear imbalance
-        total_zones = self.zone_premium_count + self.zone_discount_count + 1
-        vec[idx] = self.zone_premium_count / total_zones
-        idx += 1
+        vec[idx] = float(self.fvg_mitigated) / total; idx += 1
 
-        # [48-63] EQ status (8 dims)
-        vec[idx] = float(self.eq_total)
-        idx += 1
-        vec[idx] = float(self.eq_unclaimed)
-        idx += 1
-        vec[idx] = float(self.eq_claimed)
-        idx += 1
-        vec[idx] = float(self.eq_high_count)
-        idx += 1
-        vec[idx] = float(self.eq_low_count)
-        idx += 1
-        # EQ bias
-        if self.eq_total > 0:
-            vec[idx] = self.eq_high_count / self.eq_total
-            idx += 1
-        else:
-            idx += 1
-        # EQ claimed ratio
-        if self.eq_total > 0:
-            vec[idx] = self.eq_claimed / self.eq_total
-            idx += 1
-        else:
-            idx += 1
-        # EQ density
-        vec[idx] = float(self.eq_total) / max(self.fvg_bullish_active + self.fvg_bearish_active, 1)
-        idx += 1
+        # displacement_avg, w_zone_fvg, w_zone_ob, reserved
+        vec[idx] = self.d_strength_mean; idx += 1
+        vec[idx] = 1.5 if self.zone_premium_count > self.zone_discount_count else 1.0; idx += 1  # w_zone_fvg
+        vec[idx] = 1.5 if self.zone_premium_count > self.zone_discount_count else 1.0; idx += 1  # w_zone_ob
+        idx += 1  # reserved
+        idx = 56
+
+        # [56-63] EQ status (8 dims)
+        # eq_high_count, eq_low_count, nearest_eq_high_dist, nearest_eq_low_dist
+        vec[idx] = float(self.eq_high_count); idx += 1
+        vec[idx] = float(self.eq_low_count); idx += 1
+        vec[idx] = 0.0; idx += 1  # nearest_eq_high_dist
+        vec[idx] = 0.0; idx += 1  # nearest_eq_low_dist
+
+        # eq_high_age_bars, eq_low_age_bars, eq_high_claimed_ratio, eq_low_claimed_ratio
+        vec[idx] = 0.0; idx += 1  # eq_high_age_bars
+        vec[idx] = 0.0; idx += 1  # eq_low_age_bars
+        total_eq = self.eq_high_count + self.eq_low_count + 1
+        vec[idx] = float(self.eq_claimed) / total_eq; idx += 1
+        vec[idx] = float(self.eq_unclaimed) / total_eq; idx += 1
 
         return vec
 
     def to_f_agg(self) -> np.ndarray:
-        """Convert sang F_agg[16]."""
+        """Convert sang F_agg[16] theo agentic_quant_full_plan.md.
+
+        [zone_density, structure_alignment_score, displacement_strength_avg,
+         bsl_density_score, ssl_density_score, premium_discount_bias,
+         news_regime_factor, session_weight_ltf, session_weight_htf,
+         cvd_alignment_score, iii_zone_max, claimed_rate_acceleration,
+         mss_recency_score, ob_confluence_score, fvg_confluence_score, reserved]
+        """
         vec = np.zeros(16, dtype=np.float64)
         idx = 0
 
-        # [0-3] Zone density metrics
-        total_zones = self.fvg_bullish_active + self.fvg_bearish_active + self.ob_bullish_active + self.ob_bearish_active
-        vec[idx] = float(total_zones)
-        idx += 1
-        vec[idx] = self.fvg_avg_strength * total_zones  # weighted strength
-        idx += 1
-        vec[idx] = self.fvg_avg_range * total_zones
-        idx += 1
-        vec[idx] = float(self.fvg_bullish_active + self.fvg_bearish_active)
-        idx += 1
+        # [0] zone_density - tong so zones
+        total_zones = (self.fvg_bullish_active + self.fvg_bearish_active +
+                       self.ob_bullish_active + self.ob_bearish_active)
+        vec[idx] = float(total_zones); idx += 1
 
-        # [4-7] Structure alignment
-        vec[idx] = self.structure_score
-        idx += 1
+        # [1] structure_alignment_score
         bullish_struct = self.mss_bullish_count * 2 + self.bos_bullish_count
         bearish_struct = self.mss_bearish_count * 2 + self.bos_bearish_count
-        vec[idx] = float(bullish_struct - bearish_struct)
-        idx += 1
-        vec[idx] = float(bullish_struct + bearish_struct)  # total structure events
-        idx += 1
-        vec[idx] = float(bullish_struct) / max(bullish_struct + bearish_struct, 1)
-        idx += 1
+        vec[idx] = float(bullish_struct - bearish_struct); idx += 1
 
-        # [8-11] Displacement
-        vec[idx] = self.d_strength_mean
-        idx += 1
-        vec[idx] = self.d_strength_max
-        idx += 1
-        vec[idx] = 1.0 if self.d_strength_max > 1.0 else 0.0  # displaced flag
-        idx += 1
-        vec[idx] = self.d_strength_mean * self.d_strength_max
-        idx += 1
+        # [2] displacement_strength_avg
+        vec[idx] = self.d_strength_mean; idx += 1
 
-        # [12-15] Price context
-        if self.current_price > 0 and self.equilibrium > 0:
-            vec[idx] = (self.current_price - self.equilibrium) / self.equilibrium
-        idx += 1
-        if self.current_price > 0 and self.atr > 0:
-            vec[idx] = self.atr / self.current_price  # normalized ATR
-        idx += 1
-        vec[idx] = float(self.zone_premium_count - self.zone_discount_count)
-        idx += 1
-        # Combined score
-        struct_aligned = self.structure_score * 0.3
-        fvg_aligned = (self.fvg_bullish_active - self.fvg_bearish_active) * 0.3
-        eq_aligned = (self.eq_high_count - self.eq_low_count) * 0.2
-        displacement = self.d_strength_mean * 0.2
-        vec[idx] = float(struct_aligned + fvg_aligned + eq_aligned + displacement)
+        # [3] bsl_density_score (can du lieu them tu BSLSSLRegistry)
+        vec[idx] = 0.0; idx += 1
+
+        # [4] ssl_density_score
+        vec[idx] = 0.0; idx += 1
+
+        # [5] premium_discount_bias
+        vec[idx] = float(self.zone_premium_count - self.zone_discount_count); idx += 1
+
+        # [6] news_regime_factor
+        vec[idx] = 1.0; idx += 1  # default: normal regime
+
+        # [7] session_weight_ltf
+        vec[idx] = 1.0; idx += 1
+
+        # [8] session_weight_htf
+        vec[idx] = 1.0; idx += 1
+
+        # [9] cvd_alignment_score
+        vec[idx] = 0.0; idx += 1
+
+        # [10] iii_zone_max
+        vec[idx] = 0.0; idx += 1
+
+        # [11] claimed_rate_acceleration
+        total_pivots = self.eq_total + 1
+        vec[idx] = float(self.eq_claimed) / total_pivots; idx += 1
+
+        # [12] mss_recency_score
+        vec[idx] = float(self.mss_bullish_count + self.mss_bearish_count); idx += 1
+
+        # [13] ob_confluence_score
+        vec[idx] = float(self.ob_bullish_active + self.ob_bearish_active); idx += 1
+
+        # [14] fvg_confluence_score
+        total_fvg_active = self.fvg_bullish_active + self.fvg_bearish_active
+        vec[idx] = float(total_fvg_active) * self.fvg_avg_strength; idx += 1
+
+        # [15] reserved
         idx += 1
 
         return vec
@@ -379,6 +377,43 @@ class LiquidityPoolIndexer:
     ) -> np.ndarray:
         """Build F_agg[16] (TODO 4.6.3)."""
         return feature_map.to_f_agg()
+
+    def apply_session_weights(
+        self,
+        f_struct: np.ndarray,
+        config: FeatureEngineeringConfig,
+    ) -> np.ndarray:
+        """Apply session weights theo Overview doc Phan IV.1.
+
+        Theo agentic_quant_full_plan.md:
+          - FVG/OB LTF × ltf_signal_weight
+          - FVG/OB HTF × htf_signal_weight
+
+        F_struct[40] = fvg_p_hold
+        F_struct[45] = fvg_p_hold (theo mapping moi)
+        F_struct[50] = ob_p_hold
+
+        Args:
+            f_struct: F_struct[64] vector
+            config: FeatureEngineeringConfig voi session weights
+
+        Returns:
+            F_struct[64] da duoc apply weights
+        """
+        if f_struct is None or len(f_struct) < 64:
+            return f_struct
+
+        result = f_struct.copy()
+
+        # fvg_p_hold (index 45)
+        result[45] *= config.session_ltf_weight
+        # ob_p_hold (index 49)
+        result[49] *= config.session_ltf_weight
+
+        # F_agg session weights (index 7-8)
+        # (f_agg duoc tinh rieng, khong nam trong f_struct)
+
+        return result
 
     def build_feature_vectors(
         self,

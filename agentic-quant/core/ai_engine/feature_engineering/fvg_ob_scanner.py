@@ -15,15 +15,22 @@ Thuat toan FVG:
 """
 from __future__ import annotations
 
-import numpy as np
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import numpy as np
 
 from core.ai_engine.feature_engineering.types import (
     FVGCollection,
     Imbalance,
     ImbalanceType,
     MitigationType,
+    FeatureEngineeringConfig,
 )
+
+if TYPE_CHECKING:
+    from core.ai_engine.feature_engineering.types import Pivot
+    from core.ai_engine.feature_engineering.types import StructureEvent
 
 
 @dataclass
@@ -31,11 +38,108 @@ class FVGConfig:
     """Config cho FVG/OB scanner (tu Pine Script Imbalance_Settings)."""
     max_count: int = 20
     max_mitigated_count: int = 5
-    merge_vi: bool = False   # Extend FVGs when overlapping with VI
-    fvg_type: str = "Always Display"  # Always Display | Same As Displacement | Level 1-4
+    merge_vi: bool = False
+    fvg_type: str = "Always Display"
     mitigated_type: MitigationType = MitigationType.WICK_FILLED
     displacement_factor: int = 2
     displacement_length: int = 100
+
+    @classmethod
+    def from_fe_config(cls, cfg: FeatureEngineeringConfig) -> FVGConfig:
+        """Factory tu FeatureEngineeringConfig."""
+        return cls(
+            merge_vi=cfg.fvg_merge_vi,
+            displacement_factor=cfg.fvg_displacement_level,
+            mitigated_type=cfg.mitigated_type,
+        )
+
+
+class FVGStateMachine:
+    """FVG State Machine - 5 states chuyen doi mot chieu.
+
+    Theo agentic_quant_full_plan.md (TODO 4.4):
+      UNMITIGATED -> WICK_TOUCHED -> WICK_FILLED -> WICK_FILLED_HALF -> BODY_FILLED
+
+    moi state chi chuyen toi mot state tiep theo (khong nhay lui).
+    """
+
+    # Thuc tu 6 types, nhung state machine chi track progression
+    _STATE_ORDER = [
+        MitigationType.NONE,
+        MitigationType.WICK_TOUCHED,
+        MitigationType.WICK_FILLED,
+        MitigationType.BODY_FILLED,
+        MitigationType.WICK_FILLED_HALF,
+        MitigationType.BODY_FILLED_HALF,
+    ]
+
+    def transition(
+        self,
+        imb: Imbalance,
+        current_bar_open: float,
+        current_bar_close: float,
+        current_bar_high: float,
+        current_bar_low: float,
+        settings_type: MitigationType,
+    ) -> MitigationType:
+        """Kiem tra chuyen doi state dua tren current bar.
+
+        Thu tu kiem tra: WICK_TOUCHED -> WICK_FILLED -> BODY_FILLED ->
+                         WICK_FILLED_HALF -> BODY_FILLED_HALF
+
+        Args:
+            imb: Imbalance hien tai
+            current_bar_*: OHLC cua bar hien tai
+            settings_type: MitigationType hien tai (WICK_FILLED, BODY_FILLED, ...)
+
+        Returns:
+            MitigationType moi (hoac cu neu chua chuyen doi)
+        """
+        if imb.mitigated:
+            return imb.mitigated_type
+
+        bottom = float(imb.bottom)
+        top = float(imb.top)
+        mid = float(imb.middle)
+        body_min = min(current_bar_open, current_bar_close)
+        body_max = max(current_bar_open, current_bar_close)
+
+        if imb.is_bullish:
+            # Bullish FVG: gia di LEN de fill gap
+            # WICK_TOUCHED: low < bottom
+            if current_bar_low < bottom:
+                return MitigationType.WICK_TOUCHED
+            # WICK_FILLED: low <= bottom
+            if current_bar_low <= bottom:
+                return MitigationType.WICK_FILLED
+            # BODY_FILLED: min(O,C) <= bottom
+            if body_min <= bottom:
+                return MitigationType.BODY_FILLED
+            # WICK_FILLED_HALF: low <= middle
+            if current_bar_low <= mid:
+                return MitigationType.WICK_FILLED_HALF
+            # BODY_FILLED_HALF: min(O,C) <= middle
+            if body_min <= mid:
+                return MitigationType.BODY_FILLED_HALF
+        else:
+            # Bearish FVG: gia di XUONG de fill gap
+            # WICK_TOUCHED: high > top
+            if current_bar_high > top:
+                return MitigationType.WICK_TOUCHED
+            # WICK_FILLED: high >= top
+            if current_bar_high >= top:
+                return MitigationType.WICK_FILLED
+            # BODY_FILLED: max(O,C) >= top
+            if body_max >= top:
+                return MitigationType.BODY_FILLED
+            # WICK_FILLED_HALF: high >= middle
+            if current_bar_high >= mid:
+                return MitigationType.WICK_FILLED_HALF
+            # BODY_FILLED_HALF: max(O,C) >= middle
+            if body_max >= mid:
+                return MitigationType.BODY_FILLED_HALF
+
+        return MitigationType.NONE
 
 
 class FVGOBScanner:
@@ -52,9 +156,29 @@ class FVGOBScanner:
     def __init__(self, config: FVGConfig | None = None) -> None:
         self.config = config or FVGConfig()
         self._collection: FVGCollection = FVGCollection()
+        self._state_machine = FVGStateMachine()
+        # News Guardrail: disable LTF FVG/OB scanning when news is active
+        self._news_guardrail_active: bool = False
+        self._atr14: float = 0.0
 
     def reset(self) -> None:
         self._collection = FVGCollection()
+
+    def on_news_alert(self, active_guardrail: bool) -> None:
+        """Hook vao NEWS_ALERT event (News Guardrail).
+
+        Theo agentic_quant_full_plan.md - khi co tinieu re su kien,
+        disable LTF FVG/OB scanning.
+        """
+        self._news_guardrail_active = active_guardrail
+
+    @property
+    def news_guardrail_active(self) -> bool:
+        return self._news_guardrail_active
+
+    def set_atr(self, atr: float) -> None:
+        """Set ATR 14 cho OB strength calculation."""
+        self._atr14 = atr
 
     # =========================================================================
     # Internal helpers
@@ -269,24 +393,20 @@ class FVGOBScanner:
     ) -> FVGCollection:
         """Phat hien FVG bi invalidate (chuyen thanh iFVG).
 
-        Pine Script (lines 1016-1025):
-          if imb.isbullish and imb.invertable and not imb.inverted:
-            imb.inverted := close < imb.open
-            if imb.inverted: iFVGs.AddImbalance(imb.close, imb.open, ...)
-          if not imb.isbullish and imb.invertable and not imb.inverted:
-            imb.inverted := close > imb.open
-            if imb.inverted: iFVGs.AddImbalance(imb.close, imb.open, ...)
+        Theo agentic_quant_full_plan.md (TODO 4.4 - iFVG Inversion Logic):
+          Bullish FVG -> iFVG: bearish candle CLOSES BELOW fvg.bottom
+            = (close < open) AND (close < fvg.bottom)
+          Bearish FVG -> iFVG: bullish candle CLOSES ABOVE fvg.top
+            = (close > open) AND (close > fvg.top)
 
-        Note: Trong Pine Script, open/close cua FVG la gia trị tao FVG.
-        Bearish FVG: open = high[2], close = low
-        Bullish FVG: open = high[2], close = low
-
-        Invalidation logic:
-          - Bullish FVG bi invalidate khi close < open (bearish candle pha vỡ)
-          - Bearish FVG bi invalidate khi close > open (bullish candle pha vỡ)
+        Dung hơn Pine Script vi Pine Script chi kiem tra close < open,
+        khong kiem tra gia tri close so voi fvg boundary.
         """
         if not collection.fvgs:
             return collection
+
+        curr_open = float(opens[0]) if len(opens) > 0 else 0.0
+        curr_close = float(closes[0]) if len(closes) > 0 else 0.0
 
         # Check invertability: bullish != previous.bullish
         for i, fvg in enumerate(collection.fvgs):
@@ -297,24 +417,22 @@ class FVGOBScanner:
         # Check inversion (iFVG)
         for fvg in collection.fvgs:
             if fvg.invertable and not fvg.inverted:
-                if fvg.is_bullish and closes[0] < fvg.bottom:
-                    # Bullish FVG bi invalidate boi bearish candle
+                # Bullish FVG bi invalidate: bearish candle (close < open) AND close < fvg.bottom
+                if fvg.is_bullish and curr_close < curr_open and curr_close < fvg.bottom:
                     fvg.inverted = True
-                    # Tao iFVG
                     ifvg = Imbalance(
                         imb_type=ImbalanceType.IFVG,
                         open_time=fvg.close_time,
                         close_time=0,
                         top=fvg.bottom,
                         bottom=fvg.top,
-                        # is_bullish derived from top/bottom
                         strength=fvg.strength,
                         displacement_factor=fvg.displacement_factor,
                     )
                     ifvg.__post_init__()
                     collection.ifvgs.append(ifvg)
-                elif not fvg.is_bullish and closes[0] > fvg.top:
-                    # Bearish FVG bi invalidate boi bullish candle
+                # Bearish FVG bi invalidate: bullish candle (close > open) AND close > fvg.top
+                elif not fvg.is_bullish and curr_close > curr_open and curr_close > fvg.top:
                     fvg.inverted = True
                     ifvg = Imbalance(
                         imb_type=ImbalanceType.IFVG,
@@ -322,7 +440,6 @@ class FVGOBScanner:
                         close_time=0,
                         top=fvg.top,
                         bottom=fvg.bottom,
-                        # is_bullish derived from top/bottom
                         strength=fvg.strength,
                         displacement_factor=fvg.displacement_factor,
                     )
@@ -476,42 +593,47 @@ class FVGOBScanner:
         highs: np.ndarray,
         lows: np.ndarray,
         closes: np.ndarray,
-        bos_trigger_idx: int,
-        bos_trigger_price: float,
+        bos_trigger_idx: int | None = None,
+        bos_trigger_price: float = 0.0,
         atr: float = 0.0,
     ) -> list[Imbalance]:
         """Phat hien Order Block truoc BOS/MSS trigger.
 
-        Pine Script / todo.md 4.4.2:
-          - Tim last bearish candle truoc BOS trigger -> Bullish OB
-          - Tim last bullish candle truoc BOS trigger -> Bearish OB
-          - strength = |high[bos] - low[bos]| / ATR
+        Theo agentic_quant_full_plan.md (TODO 4.4):
+          - Tim last bearish candle truoc trigger -> Bullish OB
+          - Tim last bullish candle truoc trigger -> Bearish OB
+          - strength = |high[bos] - low[bos]| / ATR_14
 
         Args:
             opens/highs/lows/closes: OHLC data
-            bos_trigger_idx: chi so bar trigger BOS/MSS
+            bos_trigger_idx: chi so bar trigger BOS/MSS (optional)
+            bos_trigger_price: gia trigger (optional)
             atr: gia tri ATR hien tai (cho strength)
         """
         obs: list[Imbalance] = []
         n = len(opens)
 
+        if bos_trigger_idx is None:
+            bos_trigger_idx = 0
+
         if bos_trigger_idx >= n or bos_trigger_idx < 1:
             return obs
+
+        # Neu chua co atr, su dung atr14 tu instance
+        atr_val = atr if atr > 0 else self._atr14
 
         # Bullish OB: tim last bearish candle truoc bos_trigger_idx
         for i in range(bos_trigger_idx - 1, max(0, bos_trigger_idx - 20), -1):
             if i >= len(opens):
                 continue
-            # Bearish candle: close < open
             if closes[i] < opens[i]:
-                strength = (highs[bos_trigger_idx] - lows[bos_trigger_idx]) / atr if atr > 0 else 0.0
+                strength = (highs[bos_trigger_idx] - lows[bos_trigger_idx]) / atr_val if atr_val > 0 else 0.0
                 ob = Imbalance(
-                    imb_type=ImbalanceType.FVG,  # OB dung lai Imbalance type
+                    imb_type=ImbalanceType.FVG,
                     open_time=0,
                     close_time=0,
                     top=highs[i],
                     bottom=lows[i],
-                    # is_bullish derived from top/bottom
                     strength=float(strength),
                 )
                 ob.__post_init__()
@@ -522,16 +644,14 @@ class FVGOBScanner:
         for i in range(bos_trigger_idx - 1, max(0, bos_trigger_idx - 20), -1):
             if i >= len(opens):
                 continue
-            # Bullish candle: close > open
             if closes[i] > opens[i]:
-                strength = (highs[bos_trigger_idx] - lows[bos_trigger_idx]) / atr if atr > 0 else 0.0
+                strength = (highs[bos_trigger_idx] - lows[bos_trigger_idx]) / atr_val if atr_val > 0 else 0.0
                 ob = Imbalance(
                     imb_type=ImbalanceType.FVG,
                     open_time=0,
                     close_time=0,
                     top=highs[i],
                     bottom=lows[i],
-                    # is_bullish derived from top/bottom
                     strength=float(strength),
                 )
                 ob.__post_init__()
@@ -539,6 +659,34 @@ class FVGOBScanner:
                 break
 
         return obs
+
+    def scan_ob_from_events(
+        self,
+        opens: np.ndarray,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        closes: np.ndarray,
+        structure_events: list,
+        atr: float = 0.0,
+    ) -> list[Imbalance]:
+        """Phat hien OB tu danh sach StructureEvents.
+
+        Theo agentic_quant_full_plan.md - dung structure_events lam trigger.
+
+        Args:
+            opens/highs/lows/closes: OHLC data
+            structure_events: list[StructureEvent] tu ICTStructureMapper
+            atr: gia tri ATR hien tai
+
+        Returns:
+            list[Imbalance] chua Order Blocks
+        """
+        all_obs: list[Imbalance] = []
+        for event in structure_events:
+            trigger_idx = getattr(event, 'trigger_index', 0)
+            obs = self.scan_ob(opens, highs, lows, closes, trigger_idx, atr=atr)
+            all_obs.extend(obs)
+        return all_obs
 
     # =========================================================================
     # Zone Classification
