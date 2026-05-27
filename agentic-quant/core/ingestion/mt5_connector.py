@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import asyncio
 import struct
 import time
@@ -255,16 +257,26 @@ class MT5Connector:
     # -------------------------------------------------------------------------
     def _mt5_tick_to_frame(self, symbol: str, tick) -> TickFrame:
         """Chuyen MT5 MqlTick thanh TickFrame."""
-        # timestamp_ms = miliseconds, chuyen thanh microseconds
         ts_us = tick.time_msc * 1000
+
+        # XAUUSD forex: tick.last va tick.volume thuong = 0
+        # Su dung mid price lam last
+        last_price = float(tick.last)
+        if last_price == 0.0:
+            last_price = (float(tick.bid) + float(tick.ask)) / 2.0
+
+        volume = float(tick.volume)
+        if volume == 0.0:
+            # Gia tri volume mac dinh cho forex
+            volume = 10.0
 
         return TickFrame(
             symbol=symbol,
             timestamp_us=ts_us,
             bid=float(tick.bid),
             ask=float(tick.ask),
-            last=float(tick.last),
-            volume=float(tick.volume),
+            last=last_price,
+            volume=volume,
             flags=int(tick.flags),
         )
 

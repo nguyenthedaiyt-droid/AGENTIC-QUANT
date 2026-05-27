@@ -12,9 +12,6 @@ from loguru import logger
 
 from core.ingestion import TIMEFRAME_SECONDS, BarState
 
-if TYPE_CHECKING:
-    pass
-
 
 class DesyncSeverity(str, Enum):
     """Muc do nghiem trong cua desync."""

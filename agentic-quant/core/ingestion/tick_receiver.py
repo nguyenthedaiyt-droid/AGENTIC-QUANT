@@ -123,8 +123,6 @@ class TickReceiver:
         self._socket = self._ctx.socket(zmq.PULL)
         self._socket.setsockopt(zmq.RCVTIMEO, 5000)  # 5s timeout
         self._socket.setsockopt(zmq.LINGER, 0)  # Dont wait on close
-        self._socket.setsockopt(zmq.CONNECT_RTRY_IVL, 1000)  # Retry interval 1s
-        self._socket.setsockopt(zmq.CONNECT_RTRY_IVL_MAX, 10000)  # Max retry 10s
 
         connect_url = f"tcp://127.0.0.1:{self.port}"
         self._socket.connect(connect_url)

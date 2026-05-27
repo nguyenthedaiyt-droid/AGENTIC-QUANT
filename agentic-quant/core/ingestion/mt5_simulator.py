@@ -66,9 +66,9 @@ class MT5TickSimulator:
     def __init__(
         self,
         symbol: str = "XAUUSD",
-        base_price: float = 2500.0,
-        volatility: float = 0.5,
-        spread: float = 0.5,
+        base_price: float = 4450.0,
+        volatility: float = 0.05,  # ~0.5 pip per tick cho XAUUSD
+        spread: float = 0.5,  # ~5 pips (XAUUSD default)
         push_address: str = "tcp://127.0.0.1:5556",
         tick_interval_ms: int = 100,
     ) -> None:
@@ -76,6 +76,8 @@ class MT5TickSimulator:
         self.push_address = push_address
         self.tick_interval_ms = tick_interval_ms
 
+        # spread: price units (~0.5 = 5 pips for XAUUSD)
+        # volatility: price units per tick (~0.05 = 0.5 pip per tick)
         self._state = SimulatedMarketState(
             symbol=symbol,
             base_price=base_price,

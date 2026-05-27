@@ -140,11 +140,7 @@ class EventBus:
 
         Tra ve callable de unsubscribe.
         """
-        with ExceptionGroup("subscribe failed") as eg:
-            try:
-                self._handlers[event_type].append(handler)
-            except Exception as e:
-                eg.add(e)
+        self._handlers[event_type].append(handler)
 
         logger.debug(
             "Subscribed {handler} to {type}",
