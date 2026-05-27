@@ -140,9 +140,11 @@
   - Deserialize TickFrame từ binary
   - Validate spread: `(ask - bid) > threshold` → ABNORMAL_SPREAD
   - Phân loại buy/sell aggressor (so sánh last với bid/ask)
-- [ ] **1.2.2** Viết MT5 Expert Advisor (`.mq5` file) phía MetaTrader:
-  - Gửi Tick qua ZeroMQ PUSH socket
-  - Fields: symbol, timestamp (microseconds), bid, ask, last, volume, flags
+- [x] **1.2.2** Viết MT5 Connector (`core/ingestion/mt5_connector.py`):
+  - Ket noi truc tiep qua official `MetaTrader5` Python API (khong can EA)
+  - Push tick qua ZeroMQ PUSH socket (TickReceiver nhan PULL)
+  - Thumbnail MT5 `MqlTick` → `TickFrame` binary
+  - Gom `MT5TickSimulator` cho backtest/integration test (khong can MT5)
 - [ ] **1.2.3** Viết integration test: giả lập MT5 EA → verify nhận tick đúng
 - [x] **1.2.4** Xử lý reconnect với exponential backoff (1s, 2s, 4s, ... max 60s)
 

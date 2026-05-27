@@ -27,6 +27,8 @@ from .historical_tick_loader import (
     export_mt5_ticks,
     validate_coverage,
 )
+from .mt5_connector import MT5Connector, MT5ConnectionConfig
+from .mt5_simulator import MT5TickSimulator
 
 __all__ = [
     # Tick data
@@ -63,4 +65,8 @@ __all__ = [
     "BacktestConfig",
     "export_mt5_ticks",
     "validate_coverage",
+    # MT5
+    "MT5Connector",
+    "MT5ConnectionConfig",
+    "MT5TickSimulator",
 ]
