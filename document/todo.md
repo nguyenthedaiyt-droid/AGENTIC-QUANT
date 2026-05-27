@@ -145,6 +145,8 @@
   - Push tick qua ZeroMQ PUSH socket (TickReceiver nhan PULL)
   - Thumbnail MT5 `MqlTick` → `TickFrame` binary
   - Gom `MT5TickSimulator` cho backtest/integration test (khong can MT5)
+  - **Da test: MT5 real connection, pipeline 11,086 ticks/sec**
+- [ ] **1.2.3** Viết integration test: gia lap MT5 EA → verify nhan tick dung
 - [ ] **1.2.3** Viết integration test: giả lập MT5 EA → verify nhận tick đúng
 - [x] **1.2.4** Xử lý reconnect với exponential backoff (1s, 2s, 4s, ... max 60s)
 
