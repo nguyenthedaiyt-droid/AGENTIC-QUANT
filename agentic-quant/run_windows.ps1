@@ -3,31 +3,20 @@
     AGENTIC-QUANT Runner for Windows
 .DESCRIPTION
     One-click script to install dependencies and run AGENTIC-QUANT on Windows.
-    Supports 3 modes: full, backend-only, dev-ui
-
 .PARAMETER Mode
-    "full"       = Docker + Backend + Frontend (default)
-    "backend"    = Docker + Backend only
-    "dev-ui"     = UI dev server (Tauri optional)
-
+    "full" = Docker + Backend + Frontend (default)
+    "backend" = Docker + Backend only
+    "dev-ui" = UI dev server (Vite)
 .PARAMETER SkipRedis
     Skip Docker/Redis check, use in-memory fallback
-
 .PARAMETER SkipBuild
     Skip frontend build (use existing dist/)
-
-.EXAMPLE
-    .\run_windows.ps1
-    .\run_windows.ps1 -Mode backend
-    .\run_windows.ps1 -Mode full -SkipRedis
 #>
 
 param(
     [ValidateSet("full", "backend", "dev-ui")]
     [string]$Mode = "full",
-
     [switch]$SkipRedis = $false,
-
     [switch]$SkipBuild = $false
 )
 
@@ -38,41 +27,19 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BACKEND_DIR = Join-Path $SCRIPT_DIR "core"
 $UI_DIR = Join-Path $SCRIPT_DIR "ui"
 $VENV_DIR = Join-Path $SCRIPT_DIR ".venv"
-$PYTHON_MIN = "3.11"
 $LOG_FILE = Join-Path $SCRIPT_DIR "logs\run.log"
 $PID_FILE = Join-Path $SCRIPT_DIR "backend.pid"
-
-# Colors
-$GREEN  = "Green"
-$YELLOW = "Yellow"
-$RED    = "Red"
-$CYAN   = "Cyan"
+$PYTHON_MIN = "3.11"
 
 # =============================================================================
 # Helper Functions
 # =============================================================================
-function Write-Step {
-    param([string]$Message, [string]$Color = $CYAN)
-    Write-Host "`n>> $Message" -ForegroundColor $Color
-}
+function Write-Step { param([string]$Msg) Write-Host "`n>> $Msg" -ForegroundColor Cyan }
+function Write-OK { Write-Host "   [OK]" -ForegroundColor Green }
+function Write-Skip { Write-Host "   [SKIP]" -ForegroundColor Yellow }
+function Write-Fail { param([string]$Msg) Write-Host "   [FAIL] $Msg" -ForegroundColor Red }
 
-function Write-OK {
-    Write-Host "   [OK]" -ForegroundColor $GREEN
-}
-
-function Write-Skip {
-    Write-Host "   [SKIP]" -ForegroundColor $YELLOW
-}
-
-function Write-Fail {
-    param([string]$Message)
-    Write-Host "   [FAIL] $Message" -ForegroundColor $RED
-}
-
-function Test-Command {
-    param([string]$Command)
-    return (Get-Command $Command -ErrorAction SilentlyContinue) -ne $null
-}
+function Test-Command { param([string]$Cmd) return (Get-Command $Cmd -ErrorAction SilentlyContinue) -ne $null }
 
 function Test-PythonVersion {
     try {
@@ -96,19 +63,15 @@ function Start-Log {
 # Banner
 # =============================================================================
 Clear-Host
-Write-Host @"
-  ╔═══════════════════════════════════════════╗
-  ║        AGENTIC-QUANT v0.1.0              ║
-  ║     AI Multi-Agent Trading System         ║
-  ╚═══════════════════════════════════════════╝
-"@ -ForegroundColor $CYAN
-Write-Host "Mode: $Mode | SkipRedis: $SkipRedis | SkipBuild: $SkipBuild`n" -ForegroundColor $YELLOW
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "       AGENTIC-QUANT v0.1.0" -ForegroundColor Cyan
+Write-Host "    AI Multi-Agent Trading System" -ForegroundColor Cyan
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "Mode: $Mode | SkipRedis: $SkipRedis | SkipBuild: $SkipBuild`n" -ForegroundColor Yellow
 
 if (!$SkipRedis) {
-    Write-Host "╔═══════════════════════════════════════════╗" -ForegroundColor $GREEN
-    Write-Host "║  YEU CAU: Docker Desktop phai dang chay    ║" -ForegroundColor $GREEN
-    Write-Host("║  pull request: docker compose up -d") -ForegroundColor $GREEN
-    Write-Host "╚═══════════════════════════════════════════╝" -ForegroundColor $GREEN
+    Write-Host "REQUIRED: Docker Desktop must be running" -ForegroundColor Green
+    Write-Host "Pull request: docker compose up -d" -ForegroundColor Green
 }
 
 Start-Log
@@ -116,7 +79,7 @@ Start-Log
 # =============================================================================
 # Step 1: Check Prerequisites
 # =============================================================================
-Write-Step "Step 1/7: Kiem tra prerequisites..." -Color $YELLOW
+Write-Step "Step 1/7: Checking prerequisites..."
 
 $allGood = $true
 
@@ -125,8 +88,8 @@ if (Test-Command "python") {
     if (Test-PythonVersion) {
         Write-OK "Python $(python --version 2>&1)"
     } else {
-        Write-Fail "Can Python >= $PYTHON_MIN"
-        Write-Host "   => Tai python tu https://www.python.org/downloads/" -ForegroundColor $RED
+        Write-Fail "Need Python >= $PYTHON_MIN"
+        Write-Host "   Download: https://www.python.org/downloads/" -ForegroundColor Red
         $allGood = $false
     }
 } else {
@@ -139,7 +102,6 @@ if (Test-Command "node") {
     Write-OK "Node $(node --version 2>&1)"
 } else {
     Write-Fail "Node.js not found"
-    Write-Host "   => Tai tu https://nodejs.org/" -ForegroundColor $RED
     $allGood = $false
 }
 
@@ -165,24 +127,24 @@ if (!$SkipRedis) {
         if ($LASTEXITCODE -eq 0) {
             Write-OK "Docker is running"
         } else {
-            Write-Fail "Docker Desktop not running"
-            Write-Host "   => Khoi dong Docker Desktop truoc, hoac dung -SkipRedis" -ForegroundColor $YELLOW
+            Write-Fail "Docker Desktop is not running"
+            Write-Host "   Start Docker Desktop or use -SkipRedis" -ForegroundColor Yellow
             $allGood = $false
         }
     } else {
         Write-Fail "Docker not installed"
-        Write-Host "   => Tai tu https://www.docker.com/products/docker-desktop/" -ForegroundColor $RED
-        Write-Host "   => Hoac chay voi -SkipRedis de dung in-memory fallback" -ForegroundColor $YELLOW
+        Write-Host "   Download: https://www.docker.com/products/docker-desktop/" -ForegroundColor Red
+        Write-Host "   Or use -SkipRedis for in-memory fallback" -ForegroundColor Yellow
         $allGood = $false
     }
 }
 
 if (!$allGood -and !$SkipRedis) {
-    Write-Host "`n[!] Nhan Enter de thu lai voi -SkipRedis, hoac Ctrl+C de thoat" -ForegroundColor $YELLOW
+    Write-Host "`nPress Enter to retry with -SkipRedis, or Ctrl+C to exit" -ForegroundColor Yellow
     $key = Read-Host
     if ($key -eq "") {
         $SkipRedis = $true
-        Write-Host "=> Tiep tuc voi in-memory fallback`n" -ForegroundColor $YELLOW
+        Write-Host "Continuing with in-memory fallback`n" -ForegroundColor Yellow
     } else {
         exit 1
     }
@@ -192,11 +154,9 @@ if (!$allGood -and !$SkipRedis) {
 # Step 2: Setup Redis + Qdrant (Docker)
 # =============================================================================
 if (!$SkipRedis) {
-    Write-Step "Step 2/7: Khoi dong Redis + Qdrant (Docker)..." -Color $YELLOW
-
+    Write-Step "Step 2/7: Starting Redis + Qdrant (Docker)..."
     Set-Location $SCRIPT_DIR
 
-    # Check if containers already running
     $redisRunning = docker ps --filter "name=agentic-quant-redis" --format "{{.Names}}" 2>$null
     $qdrantRunning = docker ps --filter "name=agentic-quant-qdrant" --format "{{.Names}}" 2>$null
 
@@ -209,28 +169,28 @@ if (!$SkipRedis) {
             Write-OK "Redis :6379 + Qdrant :6333"
         } else {
             Write-Fail "Docker compose failed"
-            Write-Host "   $composeResult" -ForegroundColor $RED
-            Write-Host "   => Tiep tuc voi in-memory fallback..." -ForegroundColor $YELLOW
+            Write-Host "   $composeResult" -ForegroundColor Red
+            Write-Host "   Continuing with in-memory fallback..." -ForegroundColor Yellow
             $SkipRedis = $true
         }
     }
 } else {
-    Write-Step "Step 2/7: Bo qua Docker (in-memory fallback)" -Color $GREEN
+    Write-Step "Step 2/7: Skipping Docker (in-memory fallback)"
 }
 
 # =============================================================================
 # Step 3: Python Virtual Environment
 # =============================================================================
-Write-Step "Step 3/7: Thiet lap Python venv..." -Color $YELLOW
+Write-Step "Step 3/7: Setting up Python venv..."
 
 if (!(Test-Path $VENV_DIR)) {
-    Write-Host "   Tao venv moi..."
+    Write-Host "   Creating venv..."
     python -m venv $VENV_DIR
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Khong the tao venv"
+        Write-Fail "Cannot create venv"
         exit 1
     }
-    Write-OK "Venv created"
+    Write-OK "Venv created at $VENV_DIR"
 } else {
     Write-OK "Venv exists"
 }
@@ -242,11 +202,10 @@ $activateScript = Join-Path $VENV_DIR "Scripts\Activate.ps1"
 # =============================================================================
 # Step 4: Install Python Dependencies
 # =============================================================================
-Write-Step "Step 4/7: Cai dat Python dependencies..." -Color $YELLOW
+Write-Step "Step 4/7: Installing Python dependencies..."
 
 $pip = Join-Path $VENV_DIR "Scripts\pip.exe"
 
-# Core deps (always needed)
 $coreDeps = @(
     "numpy>=1.26.0", "pandas>=2.2.0", "pyyaml>=6.0", "pydantic>=2.9.0",
     "loguru>=0.9.0", "msgpack>=1.0.0",
@@ -257,7 +216,7 @@ $coreDeps = @(
     "prometheus-client>=0.21.0"
 )
 
-Write-Host "   Cai core packages..."
+Write-Host "   Installing core packages..."
 foreach ($dep in $coreDeps) {
     & $pip install $dep --quiet 2>&1 | Out-Null
 }
@@ -268,41 +227,40 @@ if ($LASTEXITCODE -eq 0) {
     exit 1
 }
 
-# ML deps (optional - skip if torch fails)
-Write-Host "   Cai ML packages (torch, optuna)..."
+# ML deps (optional - torch)
+Write-Host "   Installing ML packages (torch)..."
 & $pip install "torch>=2.5.0" --quiet 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-OK "PyTorch installed"
 } else {
-    Write-Skip "PyTorch (khong co GPU -> skip, van chay duoc)"
+    Write-Skip "PyTorch (no GPU, can still run)"
 }
 
 & $pip install "optuna>=4.0.0" --quiet 2>&1 | Out-Null
 
 # Vector DB (optional)
-Write-Host "   Cai Vector DB packages..."
+Write-Host "   Installing Vector DB packages..."
 & $pip install "qdrant-client>=1.12.0" "chromadb>=0.4.0" --quiet 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-OK "Vector DB installed"
 } else {
-    Write-Skip "Vector DB (co the cai sau)"
+    Write-Skip "Vector DB (can install later)"
 }
 
 # Run SQLite migrations
-Write-Host "   Chay SQLite migrations..."
+Write-Host "   Running SQLite migrations..."
 python -m scripts.migrations 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-OK "DB migrations done"
 } else {
-    Write-Skip "Migrations (DB chua tao?)"
+    Write-Skip "Migrations (DB may not exist yet)"
 }
 
 # =============================================================================
 # Step 5: Install Frontend Dependencies
 # =============================================================================
 if ($Mode -eq "full" -or $Mode -eq "dev-ui") {
-    Write-Step "Step 5/7: Cai dat Frontend dependencies..." -Color $YELLOW
-
+    Write-Step "Step 5/7: Installing Frontend dependencies..."
     Set-Location $UI_DIR
 
     if (!(Test-Path "node_modules\.package-lock.json")) {
@@ -312,13 +270,12 @@ if ($Mode -eq "full" -or $Mode -eq "dev-ui") {
             Write-OK "npm packages installed"
         } else {
             Write-Fail "npm install failed"
-            Write-Host "   => Thu: cd ui && npm install" -ForegroundColor $RED
+            Write-Host "   Try: cd ui && npm install" -ForegroundColor Red
         }
     } else {
         Write-OK "node_modules exists"
     }
 
-    # Build frontend if needed
     if ($Mode -eq "full" -and !$SkipBuild) {
         Write-Host "   npm run build..."
         if (!(Test-Path "dist\index.html")) {
@@ -329,22 +286,20 @@ if ($Mode -eq "full" -or $Mode -eq "dev-ui") {
                 Write-Fail "Frontend build failed"
             }
         } else {
-            Write-OK "dist/ exists (dung -SkipBuild de bo qua)"
+            Write-OK "dist/ exists (use -SkipBuild to skip)"
         }
     }
-
     Set-Location $SCRIPT_DIR
 } else {
-    Write-Step "Step 5/7: Bo qua Frontend (backend-only mode)" -Color $GREEN
+    Write-Step "Step 5/7: Skipping Frontend (backend-only mode)"
 }
 
 # =============================================================================
 # Step 6: Start Backend
 # =============================================================================
-Write-Step "Step 6/7: Khoi dong Backend Python..." -Color $YELLOW
+Write-Step "Step 6/7: Starting Backend..."
 
 $env:AQ_SKIP_REDIS = if ($SkipRedis) { "1" } else { "0" }
-
 $pythonExe = Join-Path $VENV_DIR "Scripts\python.exe"
 
 # Kill old backend if running
@@ -352,159 +307,118 @@ $oldPid = Get-Content $PID_FILE -ErrorAction SilentlyContinue
 if ($oldPid) {
     $oldProcess = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
     if ($oldProcess) {
-        Write-Host "   Tat backend cu (PID $oldPid)..."
+        Write-Host "   Killing old backend (PID $oldPid)..."
         Stop-Process -Id $oldPid -Force
     }
 }
 
-# Start backend in background
+# Start backend process
 Write-Host "   Starting: python -m core.main"
-$backendJob = Start-Job -ScriptBlock {
-    param($exe, $dir)
-    Set-Location $dir
-    $env:AQ_SKIP_REDIS = if ($env:AQ_SKIP_REDIS -eq "1") { "1" } else { "0" }
-    & $exe -m core.main
-} -ArgumentList $pythonExe, $SCRIPT_DIR
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $pythonExe
+$psi.Arguments = "-m core.main"
+$psi.WorkingDirectory = $SCRIPT_DIR
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.EnvironmentVariables["AQ_SKIP_REDIS"] = $env:AQ_SKIP_REDIS
 
-# Wait for READY signal
+$proc = New-Object System.Diagnostics.Process
+$proc.StartInfo = $psi
+$proc.Start() | Out-Null
+
+$backendPid = $proc.Id
+$backendPid | Out-File -FilePath $PID_FILE -Force
+
+# Wait for AGENTIQ_BACKEND_READY
 $timeout = 30
-$elapsed = 0
 $ready = $false
-while ($elapsed -lt $timeout) {
-    $output = Receive-Job -Job $backendJob 2>&1
-    if ($output -match "AGENTIQ_BACKEND_READY") {
+$output = ""
+for ($i = 0; $i -lt $timeout; $i++) {
+    if ($proc.HasExited) { break }
+    $line = $proc.StandardOutput.ReadLine()
+    if ($line -match "AGENTIQ_BACKEND_READY") {
         $ready = $true
         break
     }
+    if ($line) { $output += $line + "`n" }
     Start-Sleep -Seconds 1
-    $elapsed++
 }
 
 if ($ready) {
-    $backendPid = $backendJob.Id
-    $backendPid | Out-File -FilePath $PID_FILE -Force
     Write-OK "Backend ready (PID: $backendPid)"
-    Write-Host "   WebSocket: ws://localhost:47290" -ForegroundColor $GREEN
+    Write-Host "   WebSocket: ws://localhost:47290" -ForegroundColor Green
+    Write-Host "   ZMQ Pull: tcp://localhost:5556" -ForegroundColor Green
 } else {
-    Write-Fail "Backend khong the ready trong ${timeout}s"
-    Write-Host "   Kiem tra log: $LOG_FILE" -ForegroundColor $RED
-    Write-Host "   Thu chay thu cong: python -m core.main" -ForegroundColor $YELLOW
+    Write-Fail "Backend did not become ready in ${timeout}s"
+    Write-Host "   Check log: $LOG_FILE" -ForegroundColor Red
+    Write-Host "   Try manual: python -m core.main" -ForegroundColor Yellow
 }
 
 # =============================================================================
 # Step 7: Start Frontend / Full App
 # =============================================================================
 if ($Mode -eq "full") {
-    Write-Step "Step 7/7: Khoi dong Tauri Desktop..." -Color $YELLOW
-
-    $tauriCli = (Get-Command "cargo" -ErrorAction SilentlyContinue)
-    if ($tauriCli) {
+    Write-Step "Step 7/7: Starting Tauri Desktop..."
+    if (Test-Command "cargo") {
         Write-Host "   cargo tauri dev..."
         Set-Location (Join-Path $SCRIPT_DIR "desktop")
-        
-        $tauriJob = Start-Job -ScriptBlock {
-            param($dir)
-            Set-Location $dir
-            cargo tauri dev 2>&1
-        } -ArgumentList (Join-Path $SCRIPT_DIR "desktop")
-        
+        $tauriProc = Start-Process -NoNewWindow -FilePath "cargo" -ArgumentList "tauri dev" -PassThru
         Write-OK "Tauri desktop starting..."
-        Write-Host "   Windows: 1600x900, title: AGENTIC-QUANT" -ForegroundColor $CYAN
+        Write-Host "   Window: 1600x900, title: AGENTIC-QUANT" -ForegroundColor Cyan
     } else {
         Write-Fail "Rust/Cargo not found"
-        Write-Host "   => Cai tu https://rustup.rs/" -ForegroundColor $RED
-        Write-Host "   => Hoac dung Mode dev-ui de chay Frontend trong browser" -ForegroundColor $YELLOW
+        Write-Host "   Install from https://rustup.rs/" -ForegroundColor Red
+        Write-Host "   Or use mode 'dev-ui' for browser" -ForegroundColor Yellow
     }
-    
     Set-Location $SCRIPT_DIR
 
 } elseif ($Mode -eq "dev-ui") {
-    Write-Step "Step 7/7: Khoi dong UI Dev Server..." -Color $YELLOW
-
+    Write-Step "Step 7/7: Starting UI Dev Server..."
     $uiJob = Start-Job -ScriptBlock {
-        param($dir)
-        Set-Location $dir
-        npm run dev 2>&1
+        param($dir) Set-Location $dir; npm run dev 2>&1
     } -ArgumentList $UI_DIR
-
     Write-OK "Vite dev server starting..."
-    Write-Host "   Mo http://localhost:3000 trong trinh duyet" -ForegroundColor $GREEN
+    Write-Host "   Open http://localhost:3000 in browser" -ForegroundColor Green
 }
 
 # =============================================================================
 # Summary
 # =============================================================================
-Write-Host @"
-
-  ╔═══════════════════════════════════════════╗
-  ║         AGENTIC-QUANT IS RUNNING          ║
-  ╠═══════════════════════════════════════════╣
-  ║                                           ║
-  ║  Backend   : ws://localhost:47290         ║
-"@ -ForegroundColor $GREEN
+Write-Host "`n================================================" -ForegroundColor Green
+Write-Host "       AGENTIC-QUANT IS RUNNING" -ForegroundColor Green
+Write-Host "================================================" -ForegroundColor Green
+Write-Host "  Backend : ws://localhost:47290" -ForegroundColor Green
 
 if ($Mode -eq "full") {
-    Write-Host @"
-  ║  Desktop   : AGENTIC-QUANT window         ║
-"@ -ForegroundColor $GREEN
+    Write-Host "  Desktop : AGENTIC-QUANT window" -ForegroundColor Green
 } elseif ($Mode -eq "dev-ui") {
-    Write-Host @"
-  ║  UI Dev    : http://localhost:3000        ║
-"@ -ForegroundColor $GREEN
+    Write-Host "  UI Dev  : http://localhost:3000" -ForegroundColor Green
 } else {
-    Write-Host @"
-  ║  Mode      : backend-only                 ║
-"@ -ForegroundColor $GREEN
+    Write-Host "  Mode    : backend-only" -ForegroundColor Green
 }
 
-Write-Host @"
-  ║  Redis     : localhost:6379               ║
-  ║  ZMQ       : tcp://localhost:5556          ║
-  ║                                           ║
-  ╠═══════════════════════════════════════════╣
-  ║                                           ║
-  ║  Ctrl+C de dung tat ca                     ║
-  ║                                           ║
-  ╚═══════════════════════════════════════════╝
-
-"@ -ForegroundColor $CYAN
+Write-Host "  Redis   : localhost:6379" -ForegroundColor Green
+Write-Host "  ZMQ     : tcp://localhost:5556" -ForegroundColor Green
+Write-Host "-----------------------------------------------" -ForegroundColor Green
+Write-Host "  Press Ctrl+C to stop everything" -ForegroundColor Cyan
+Write-Host "================================================" -ForegroundColor Green
 
 # =============================================================================
-# Cleanup on Ctrl+C
+# Keep running + health check
 # =============================================================================
 try {
-    # Keep script running
     while ($true) {
         Start-Sleep -Seconds 10
-        
-        # Check backend health
         try {
             $health = Invoke-RestMethod -Uri "http://localhost:47290/health" -TimeoutSec 5 -ErrorAction SilentlyContinue
-            Write-Host "   [HEALTH] Backend OK" -ForegroundColor $GREEN
+            Write-Host "   [HEALTH] Backend OK" -ForegroundColor Green
         } catch {
-            Write-Host "   [HEALTH] Backend check failed" -ForegroundColor $RED
+            Write-Host "   [HEALTH] Backend check failed" -ForegroundColor Red
         }
     }
 } finally {
-    Write-Host "`nDang dung AGENTIC-QUANT..." -ForegroundColor $YELLOW
-    
-    # Kill backend
-    if ($backendJob) {
-        Stop-Job $backendJob -ErrorAction SilentlyContinue
-        Remove-Job $backendJob -ErrorAction SilentlyContinue
-    }
-    
-    # Kill Tauri
-    if ($tauriJob) {
-        Stop-Job $tauriJob -ErrorAction SilentlyContinue
-        Remove-Job $tauriJob -ErrorAction SilentlyContinue
-    }
-    
-    # Kill UI
-    if ($uiJob) {
-        Stop-Job $uiJob -ErrorAction SilentlyContinue
-        Remove-Job $uiJob -ErrorAction SilentlyContinue
-    }
-    
-    Write-OK "Da dung. Hen gap lai!"
+    Write-Host "`nShutting down AGENTIC-QUANT..." -ForegroundColor Yellow
+    if ($proc -and !$proc.HasExited) { $proc.Kill() }
+    Write-OK "Done. See you later!"
 }
