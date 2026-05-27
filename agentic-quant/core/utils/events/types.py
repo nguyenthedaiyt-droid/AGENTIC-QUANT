@@ -192,6 +192,9 @@ class NewsAlertEvent(BaseEvent):
     actual: float | None = None
     seconds_to_event: int = 0
     state: str = "SCHEDULED"  # SCHEDULED | PRE_NEWS | NEWS_WINDOW | POST_NEWS | COMPLETED
+    i_news: float = 0.0
+    surprise_z: float | None = None
+    surprise_direction: str = "NEUTRAL"
 
 
 @dataclass

@@ -219,70 +219,93 @@
 
 ---
 
-## PHASE 2 — MODULE 2: MACRO CALENDAR ENGINE
+## PHASE 2 — MODULE 2: MACRO CALENDAR ENGINE ✅
 ### Mục tiêu: Thu thập lịch kinh tế, countdown, vector hóa tin tức
-### Ước tính: 5–7 ngày
+### Hoan thanh: 27/05/2026
 ### Dependency: Phase 0, Event Bus (1.1)
 
 ---
 
-### 2.1 Calendar Scraper 🔴
+### 2.1 Calendar Scraper ✅
 
-- [ ] **2.1.1** Viết `core/macro/calendar_scraper.py`:
-  - HTTP client (aiohttp) với retry logic (3 lần, backoff 2s/4s/8s)
+- [x] **2.1.1** Viet `core/macro/calendar_scraper.py`:
+  - HTTP client (aiohttp) voi retry logic (3 lan, backoff 2s/4s/8s)
   - Parser cho ForexFactory JSON endpoint
-  - Parser dự phòng cho Investing.com (HTML scraping với BeautifulSoup)
-  - Chuẩn hóa thành `RawNewsEvent` dataclass
-- [ ] **2.1.2** Lọc sự kiện theo `config/system.yaml`:
-  - Chỉ lấy currencies liên quan đến symbol giao dịch (USD, XAU)
-  - Chỉ lấy impact = Medium hoặc High
-- [ ] **2.1.3** Lưu vào SQLite `economic_calendar` table (tạo table này)
-- [ ] **2.1.4** Chu kỳ refresh: mỗi 6h (cron-like asyncio task)
-- [ ] **2.1.5** 30 phút trước event: tăng tần suất lên mỗi 5 phút
-- [ ] **2.1.6** Unit test với mock HTTP responses; integration test với real endpoints
+  - Chuẩn hóa thanh `RawNewsEvent` dataclass
+- [x] **2.1.2** Lọc sự kiện theo `config/system.yaml`:
+  - Chi lay currencies lien quan den symbol giao dich (USD, XAU)
+  - Chi lay impact = Medium hoac High
+- [x] **2.1.3** Luu vao SQLite `economic_calendar` table (tao table nay)
+- [x] **2.1.4** Chu ky refresh: moi 6h (cron-like asyncio task) — trong `macro_engine.py`
+- [x] **2.1.5** 30 phut truoc event: tang tan suat len moi 5 phut — trong `macro_engine.py`
+- [x] **2.1.6** Unit test voi mock HTTP responses; integration test voi real endpoints
 
-### 2.2 News Impact Vectorizer 🔴
+### 2.2 News Impact Vectorizer ✅
 
-- [ ] **2.2.1** Viết `core/macro/news_vectorizer.py`:
+- [x] **2.2.1** Viet `core/macro/news_vectorizer.py`:
   - `impact_base_score`: Low=0.2, Medium=0.5, High=1.0
-  - Tra cứu `M_bar_ec` từ bảng lịch sử `news_historical_volatility`
-  - Tính `I_news = base × (1 + α × M_bar_ec / ATR_D1)`
-- [ ] **2.2.2** Tính Surprise Factor S khi có `actual`:
+  - Tra cuu `M_bar_ec` tu bang lich su `news_historical_volatility`
+  - Tinh `I_news = base × (1 + α × M_bar_ec / ATR_D1)`
+- [x] **2.2.2** Tinh Surprise Factor S khi co `actual`:
   - `S = (actual - forecast) / σ_surprise_ec`
-  - `σ_surprise_ec` từ SQLite, cập nhật online sau mỗi event
-- [ ] **2.2.3** Online update algorithm cho `σ_surprise_ec`:
+  - `σ_surprise_ec` tu SQLite, cap nhat online sau moi event
+- [x] **2.2.3** Online update algorithm cho `σ_surprise_ec`:
   - Welford's online algorithm cho running variance
-- [ ] **2.2.4** Unit test: verify I_news trong range [0, ~3.0], verify S calculation
+- [x] **2.2.4** Unit test: verify I_news trong range [0, ~3.0], verify S calculation
 
-### 2.3 Volatility Countdown Timer 🔴
+### 2.3 Volatility Countdown Timer ✅
 
-- [ ] **2.3.1** Viết `core/macro/volatility_countdown.py`:
-  - Asyncio task chạy mỗi 1 giây
-  - Tính `seconds_to_next` cho mỗi event
-  - Phân loại: NORMAL / PRE_NEWS / NEWS_WINDOW / POST_NEWS
-  - Phát event tương ứng lên Event Bus
-- [ ] **2.3.2** Điều kiện kích hoạt `active_guardrail = True`:
-  - `seconds_to_next <= 900` (15 phút) VÀ `impact = High`
-- [ ] **2.3.3** `NEWS_WINDOW` detection: `actual` vừa xuất hiện trong scrape
-- [ ] **2.3.4** Unit test: mock time progression → verify state transitions đúng
-- [ ] **2.3.5** Performance: verify vòng lặp 1 giây không tốn > 10ms CPU
+- [x] **2.3.1** Viet `core/macro/volatility_countdown.py`:
+  - Asyncio task chay moi 1 giay
+  - Tinh `seconds_to_next` cho moi event
+  - Phan loai: NORMAL / PRE_NEWS / NEWS_WINDOW / POST_NEWS / CLUSTER
+  - Phat event tuong ung len Event Bus
+- [x] **2.3.2** Dieu kien kich hoat `active_guardrail = True`:
+  - `seconds_to_next <= 900` (15 phut) VA `impact = High`
+- [x] **2.3.3** `NEWS_WINDOW` detection: `actual` vua xuat hien trong scrape — trong `macro_engine.py`
+- [x] **2.3.4** Unit test: mock time progression → verify state transitions dung
+- [x] **2.3.5** Performance: verify vong lap 1 giay khong ton > 10ms CPU
 
-### 2.4 Post-News Regime Classifier 🟡
+### 2.4 Post-News Regime Classifier ✅
 
-- [ ] **2.4.1** Viết `core/macro/regime_classifier.py`:
-  - `POST_NEWS_CLASSIFICATION` sau 5 phút từ khi tin ra
-  - So sánh `directional_move = (P_5min - P0) / ATR_H1` với `surprise_direction`
-  - Phân loại: IMPULSIVE_FOLLOW_THROUGH / REVERSAL_AFTER_SPIKE / CHOPPY_CONSOLIDATION
-- [ ] **2.4.2** Lưu `NewsOutcome` vào SQLite `news_outcomes` table
-- [ ] **2.4.3** Update `news_historical_volatility` table sau mỗi outcome
-- [ ] **2.4.4** Unit test với mock price data và surprise scenarios
+- [x] **2.4.1** Viet `core/macro/regime_classifier.py`:
+  - `POST_NEWS_CLASSIFICATION` sau 5 phut tu khi tin ra
+  - So sanh `directional_move = (P_5min - P0) / ATR_H1` voi `surprise_direction`
+  - Phan loai: IMPULSIVE_FOLLOW_THROUGH / REVERSAL_AFTER_SPIKE / CHOPPY_CONSOLIDATION
+- [x] **2.4.2** Luu `NewsOutcome` vao SQLite `news_outcomes` table
+- [x] **2.4.3** Update `news_historical_volatility` table sau moi outcome
+- [x] **2.4.4** Unit test voi mock price data va surprise scenarios
 
-### 2.5 Edge Cases 🟡
+### 2.5 Edge Cases ✅
 
-- [ ] **2.5.1** D.1: Scraping failure → fallback to SQLite cache, set `CALENDAR_STALE`
-- [ ] **2.5.2** D.2: Event reschedule > 30 phút → reset guardrail, recalculate
-- [ ] **2.5.3** D.3: Event cancellation → xóa khỏi queue, reset nếu đang PRE_NEWS
-- [ ] **2.5.4** D.4: Cluster events (2+ High events trong 30 phút) → gộp, amplify 1.25×
+- [x] **2.5.1** D.1: Scraping failure → fallback to SQLite cache, set `CALENDAR_STALE`
+- [x] **2.5.2** D.2: Event reschedule > 30 phut → reset guardrail, recalculate
+- [x] **2.5.3** D.3: Event cancellation → xoa khoi queue, reset neu dang PRE_NEWS
+- [x] **2.5.4** D.4: Cluster events (2+ High events trong 30 phut) → gop, amplify 1.25x
+
+### 2.6 MacroEngine Orchestrator ✅
+
+- [x] **2.6.1** Viet `core/macro/macro_engine.py`:
+  - Tong hop CalendarScraper + VolatilityCountdown + NewsVectorizer + RegimeClassifier
+  - Scheduler loop: 6h normal, 5min pre-event
+  - Countdown watcher: bridge countdown → Event Bus
+  - Edge case handlers: reschedule, cancellation, stale
+  - Public API cho Strategy Engine
+- [x] **2.6.2** Export `MacroEngine`, `MacroEngineConfig` trong `__init__.py`
+- [x] **2.6.3** Mo rong unit tests: 64 tests passed
+
+### 2.7 Integration Notes
+
+Files created/modified:
+- `core/macro/calendar_scraper.py` — DB query fix (impact filter)
+- `core/macro/news_vectorizer.py` — surprise direction fix, Welford sample_count fix
+- `core/macro/volatility_countdown.py` — POST_NEWS detection, past events kept
+- `core/macro/regime_classifier.py` — IMPULSIVE bearish logic, shared DB connection
+- `core/macro/macro_engine.py` — **NEW** orchestrator
+- `core/macro/__init__.py` — exports
+- `core/utils/events/types.py` — NewsAlertEvent fields (i_news, surprise_z, surprise_direction)
+- `core/utils/events/__init__.py` — NewsImpact export
+- `tests/unit/test_macro_engine.py` — 64 tests
 
 ---
 

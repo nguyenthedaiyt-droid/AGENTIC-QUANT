@@ -27,6 +27,7 @@ dependencies = [
 
     # Vector DB
     "qdrant-client>=1.12.0",
+    "chromadb>=0.4.0",
 
     # ML
     "xgboost>=2.1.0",
