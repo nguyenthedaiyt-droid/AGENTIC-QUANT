@@ -283,31 +283,58 @@ class RuleFallback:
         macro: dict[str, Any],
         components: dict[str, float],
     ) -> str:
-        """Build brief thesis statement."""
-        parts = []
-        side = "BULLISH" if is_bull else "BEARISH"
+        """
+        Sinh cau tieng Viet mo ta ly do fallback.
 
-        if is_bull:
-            pd = components.get("premium_discount", 0)
-            if pd > 0:
-                parts.append("Price in DISCOUNT zone")
-            if components.get("model_a_bsl_edge", 0) > 0:
-                parts.append("Model A favors BSL")
-            if components.get("active_zones", 0) > 0:
-                parts.append("Bullish zones active")
-        else:
-            pd = components.get("premium_discount", 0)
-            if pd < 0:
-                parts.append("Price in PREMIUM zone")
-            if components.get("model_a_bsl_edge", 0) < 0:
-                parts.append("Model A favors SSL")
-            if components.get("active_zones", 0) < 0:
-                parts.append("Bearish zones active")
+        Tu component scores (model_a_score, premium_discount, etc.)
+        -> sinh ra cau tieng Viet.
+
+        VD:
+          'Bullish bias: P_BSL={} thap, premium zone {} active zones'
+          'Bearish bias: P_SSL={} cao, discount zone, macro bearish'
+        """
+        side = "Bullish" if is_bull else "Bearish"
+        parts = []
+
+        # Model A score (BSL/SSL edge)
+        bsl_edge = components.get("model_a_bsl_edge", 0)
+        if abs(bsl_edge) > 0.01:
+            p_bsl = features.get("p_bsl", 0.5)
+            p_ssl = features.get("p_ssl", 0.3)
+            if is_bull:
+                parts.append(f"P_BSL={p_bsl:.3f} > P_SSL={p_ssl:.3f}")
+            else:
+                parts.append(f"P_SSL={p_ssl:.3f} > P_BSL={p_bsl:.3f}")
+
+        # Premium / Discount zone
+        pd = components.get("premium_discount", 0)
+        if is_bull and pd > 0.01:
+            parts.append(f"discount zone ({pd:+.4f})")
+        elif not is_bull and pd < -0.01:
+            parts.append(f"premium zone ({pd:+.4f})")
+
+        # Active zones
+        zones_val = components.get("active_zones", 0)
+        if is_bull and zones_val > 0.01:
+            parts.append(f"bullish zones active ({zones_val:+.4f})")
+        elif not is_bull and zones_val < -0.01:
+            parts.append(f"bearish zones active ({zones_val:+.4f})")
+
+        # Macro regime
+        regime_val = components.get("macro_regime", 0)
+        regime = macro.get("regime", macro.get("macro_regime", ""))
+        if abs(regime_val) > 0.005:
+            parts.append(f"macro {regime} ({regime_val:+.4f})")
+
+        # Surprise
+        news_val = components.get("news_surprise", 0)
+        if abs(news_val) > 0.001:
+            parts.append("co su kien bat ngo" if is_bull else "co tin xau")
 
         if not parts:
-            parts.append("No strong signals detected")
+            parts.append("khong co tin hieu ro rang")
 
-        return f"Rule-based {side}: {' + '.join(parts)}"
+        return f"Rule-based {side} bias: {', '.join(parts)}"
 
     def _build_reasoning(
         self,

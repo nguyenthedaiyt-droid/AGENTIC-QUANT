@@ -67,13 +67,16 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests/unit", "tests/integration"]
+testpaths = ["tests/unit", "tests/integration", "tests/benchmark", "tests/stress", "tests/security"]
 markers = [
     "slow: runs slowly",
     "integration: integration tests",
     "backtest: backtest-related tests",
     "unit: unit tests",
     "ml: requires ML libraries",
+    "benchmark: benchmark / latency tests",
+    "stress: stress / throughput tests",
+    "security: security tests",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

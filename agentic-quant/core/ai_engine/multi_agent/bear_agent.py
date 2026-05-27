@@ -217,13 +217,34 @@ KẾT QUẢ ĐẦU RA (JSON):
                 active_guardrail=active_guardrail,
             )
 
-        # === Validate evidence count ===
+        # === Validate evidence count + append warning ===
         evidence_list = parsed.get("evidence", [])
         if len(evidence_list) < MIN_EVIDENCE_COUNT:
+            warning_msg = (
+                f"[CẢNH BÁO] Không đủ bằng chứng: chỉ có {len(evidence_list)}/"
+                f"{MIN_EVIDENCE_COUNT} yêu cầu. Cần thêm bằng chứng từ Technical Brief."
+            )
             logger.warning(
                 f"BearAgent: only {len(evidence_list)} evidence(s), "
                 f"minimum required: {MIN_EVIDENCE_COUNT}"
             )
+            # Append insufficient evidence warning vao reasoning
+            existing_reasoning = parsed.get("reasoning", "")
+            if existing_reasoning:
+                parsed["reasoning"] = existing_reasoning + "\n\n" + warning_msg
+            else:
+                parsed["reasoning"] = warning_msg
+
+        # === Confidence cap khi active_guardrail ===
+        if active_guardrail:
+            raw_conf = parsed.get("confidence", 1.0)
+            capped_conf = min(raw_conf, 0.65)
+            if capped_conf < raw_conf:
+                logger.debug(
+                    f"BearAgent: confidence capped {raw_conf:.2f} -> {capped_conf:.2f} "
+                    f"(guardrail active)"
+                )
+                parsed["confidence"] = capped_conf
 
         # === Extract fields ===
         evidence_strs = []

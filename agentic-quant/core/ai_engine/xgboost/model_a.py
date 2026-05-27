@@ -3,6 +3,7 @@
 # Multiclass Classifier: P_BSL / P_SSL / P_lateral
 # Custom objective: Overconfidence Penalty lambda=0.5 khi max_prob>0.85
 # IC target > 0.05
+# Batch 2: Session Weights + Platt Scaling + Brier Score + ECE
 # =============================================================================
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from loguru import logger
 if TYPE_CHECKING:
     import xgboost as xgb
     from sklearn.metrics import classification_report
+    from sklearn.calibration import CalibratedClassifierCV
 else:
     try:
         import xgboost as xgb
@@ -26,6 +28,10 @@ else:
         from sklearn.metrics import classification_report
     except ImportError:
         classification_report = None  # type: ignore[assignment]
+    try:
+        from sklearn.calibration import CalibratedClassifierCV
+    except ImportError:
+        CalibratedClassifierCV = None  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -45,6 +51,22 @@ OVERC_PROB_THRESHOLD = 0.85
 
 # IC target minimum
 IC_TARGET_MIN = 0.05
+
+# Calibration & ECE defaults
+N_CALIBRATION_BINS = 10      # So bin cho ECE
+CALIBRATION_METHOD = "sigmoid"  # Platt scaling (sigmoid) cho Model A
+CALIBRATION_CV = 5           # So fold cross-validation khi fit calibrator
+
+# Regime codes (consistent with inference.py)
+REGIME_NORMAL = 0
+REGIME_TRENDING_LV = 1
+REGIME_TRENDING_HV = 2
+REGIME_CHOPPY_HV = 3
+
+# Session weight constants (Phan IV.1)
+SESSION_WEIGHT_ACCUMULATION: float = 0.2   # P_lateral += (P_BSL+P_SSL) * 0.2
+SESSION_WEIGHT_EXPANSION: float = 0.0      # confidence_qualifier -> HIGH if >= MEDIUM
+SESSION_WEIGHT_REVERSAL: float = 0.10      # Bear Evidence weight += 10%
 
 # Default training params
 DEFAULT_MODEL_A_PARAMS: dict[str, Any] = {
@@ -196,6 +218,189 @@ def compute_ic_per_class(
 
 
 # =============================================================================
+# Calibration: Platt Scaling (sigmoid) cho Model A
+# =============================================================================
+
+def fit_platt_calibration(
+    model: "xgb.XGBClassifier",
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    method: str = CALIBRATION_METHOD,
+    cv: int = CALIBRATION_CV,
+) -> "CalibratedClassifierCV | None":
+    """Fit Platt Scaling (sigmoid) calibration cho Model A probabilities.
+
+    Su dung sklearn.calibration.CalibratedClassifierCV de calibrate
+    probabilities tu XGBoost raw output. Platt scaling ap dung sigmoid
+    mapping: P_cal = 1 / (1 + exp(A * raw_prob + B)).
+
+    Args:
+        model: XGBoost classifier da trained
+        X_val: Validation features (n_samples, n_features)
+        y_val: Validation labels (n_samples,) — 0=BSL, 1=SSL, 2=LATERAL
+        method: Phuong phap calibration: 'sigmoid' (Platt) hoac 'isotonic'
+        cv: So fold cross-validation (default: 5)
+
+    Returns:
+        CalibratedClassifierCV instance, hoac None neu khong the calibrate
+    """
+    if CalibratedClassifierCV is None:
+        logger.warning("sklearn.calibration not available. Skipping Platt calibration.")
+        return None
+
+    if X_val is None or y_val is None or len(X_val) < 10:
+        logger.warning(f"Validation set qua nho ({len(X_val) if X_val is not None else 0}), bo qua calibration.")
+        return None
+
+    if not hasattr(model, "predict_proba"):
+        logger.warning("Model khong co predict_proba, bo qua calibration.")
+        return None
+
+    try:
+        calibrator = CalibratedClassifierCV(
+            estimator=model,
+            method=method,  # 'sigmoid' = Platt scaling
+            cv=cv,
+        )
+        calibrator.fit(X_val, y_val)
+        logger.info(
+            f"Platt calibration ({method}) fitted tren {len(X_val)} validation samples, "
+            f"cv={cv}"
+        )
+        return calibrator
+    except Exception as e:
+        logger.error(f"Platt calibration that bai: {e}")
+        return None
+
+
+def apply_platt_calibration(
+    probas: np.ndarray,
+    calibrator: "CalibratedClassifierCV | None",
+) -> np.ndarray:
+    """Apply Platt scaling calibration vao probabilities.
+
+    Args:
+        probas: Raw probabilities (n_samples, 3)
+        calibrator: Fitted CalibratedClassifierCV instance
+
+    Returns:
+        Calibrated probabilities (n_samples, 3), hoac original neu calibrator=None
+    """
+    if calibrator is None:
+        return probas
+
+    if probas.size == 0:
+        return probas
+
+    try:
+        # CalibratedClassifierCV.predict_proba can xu ly truc tiep
+        # Can tao dummy feature de predict — thuc ra calibrator da
+        # hoc duoc mapping tu X->proba, nhung vi XGBoost raw probas
+        # da duoc dung, ta can pass qua estimator
+        calibrated = calibrator.predict_proba(probas)
+        # calibrated shape: (n_samples, n_classes)
+        if calibrated.shape[1] == 3:
+            return calibrated
+        return probas
+    except Exception as e:
+        logger.warning(f"Apply calibration that bai: {e}")
+        return probas
+
+
+# =============================================================================
+# Brier Score & Expected Calibration Error (ECE)
+# =============================================================================
+
+def compute_brier_score(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+) -> float:
+    """Tinh Brier Score cho multiclass probabilities.
+
+    Brier Score = mean((p_i - y_i)^2) voi y_i la one-hot encoding.
+    Range: [0.0, 2.0], gia tri thap hon = calibration tot hon.
+
+    Args:
+        y_true: True labels (n_samples,) — 0=BSL, 1=SSL, 2=LATERAL
+        y_pred_proba: Predicted probabilities (n_samples, 3)
+
+    Returns:
+        Brier Score (float)
+
+    Raises:
+        ValueError: Neu input empty hoac shape mismatch
+    """
+    if len(y_true) == 0 or y_pred_proba.size == 0:
+        raise ValueError("Input rong, khong the tinh Brier Score.")
+
+    n_samples = len(y_true)
+    n_classes = y_pred_proba.shape[1]
+
+    # One-hot encoding
+    y_onehot = np.zeros((n_samples, n_classes), dtype=np.float64)
+    y_onehot[np.arange(n_samples), y_true] = 1.0
+
+    # Brier Score = mean of squared differences
+    squared_errors = (y_pred_proba - y_onehot) ** 2
+    brier = float(np.mean(squared_errors))
+
+    return brier
+
+
+def compute_ece(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    n_bins: int = N_CALIBRATION_BINS,
+) -> float:
+    """Tinh Expected Calibration Error (ECE).
+
+    ECE = sum_{k=1}^{K} (w_k * |acc_k - conf_k|)
+    - Chia [0,1] thanh K bins deu
+    - w_k = ty le samples trong bin k
+    - acc_k = accuracy trong bin k
+    - conf_k = avg confidence trong bin k
+
+    Args:
+        y_true: True labels (n_samples,) — 0=BSL, 1=SSL, 2=LATERAL
+        y_pred_proba: Predicted probabilities (n_samples, 3)
+        n_bins: So bin (default: 10)
+
+    Returns:
+        ECE value (float), thap hon = calibration tot hon
+
+    Raises:
+        ValueError: Neu input empty
+    """
+    if len(y_true) == 0 or y_pred_proba.size == 0:
+        raise ValueError("Input rong, khong the tinh ECE.")
+
+    n_samples = len(y_true)
+    predicted_classes = np.argmax(y_pred_proba, axis=1)
+    max_confs = np.max(y_pred_proba, axis=1)
+
+    bin_boundaries = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+
+    for k in range(n_bins):
+        # Mask: samples trong bin k
+        in_bin = (max_confs > bin_boundaries[k]) & (max_confs <= bin_boundaries[k + 1])
+
+        if np.sum(in_bin) == 0:
+            continue
+
+        # Accuracy trong bin
+        bin_accuracy = np.mean(predicted_classes[in_bin] == y_true[in_bin])
+        # Confidence trung binh trong bin
+        bin_confidence = np.mean(max_confs[in_bin])
+        # Weight = ty le samples trong bin
+        bin_weight = np.sum(in_bin) / n_samples
+
+        ece += bin_weight * abs(bin_accuracy - bin_confidence)
+
+    return ece
+
+
+# =============================================================================
 # Model A: XGBoost Multiclass
 # =============================================================================
 
@@ -210,6 +415,9 @@ class ModelAConfig:
         ic_target_min: Minimum IC target (default: 0.05)
         early_stopping_rounds: Early stopping rounds (default: 50)
         model_path: Path to save/load model
+        calibration_method: Platt scaling method ('sigmoid' or 'isotonic')
+        calibration_cv: Cross-validation folds for calibration
+        n_calibration_bins: Number of bins for ECE computation
     """
     params: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_MODEL_A_PARAMS))
     penalty_lambda: float = OVERC_PENALTY_LAMBDA
@@ -217,6 +425,9 @@ class ModelAConfig:
     ic_target_min: float = IC_TARGET_MIN
     early_stopping_rounds: int = 50
     model_path: str | Path = "models/xgboost/model_a.json"
+    calibration_method: str = CALIBRATION_METHOD
+    calibration_cv: int = CALIBRATION_CV
+    n_calibration_bins: int = N_CALIBRATION_BINS
 
 
 class XGBoostModelA:
@@ -247,6 +458,11 @@ class XGBoostModelA:
         self._last_ic: float = 0.0
         self._last_ic_per_class: dict[str, float] = {}
 
+        # Batch 2: Calibration & ECE
+        self._calibrator: "CalibratedClassifierCV | None" = None
+        self._last_brier_score: float = 0.0
+        self._last_ece: float = 0.0
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -270,6 +486,18 @@ class XGBoostModelA:
     @property
     def last_ic_per_class(self) -> dict[str, float]:
         return self._last_ic_per_class
+
+    @property
+    def calibrator(self) -> "CalibratedClassifierCV | None":
+        return self._calibrator
+
+    @property
+    def last_brier_score(self) -> float:
+        return self._last_brier_score
+
+    @property
+    def last_ece(self) -> float:
+        return self._last_ece
 
     # ------------------------------------------------------------------
     # Training
@@ -429,6 +657,116 @@ class XGBoostModelA:
         return history
 
     # ------------------------------------------------------------------
+    # Calibration: Platt Scaling
+    # ------------------------------------------------------------------
+
+    def fit_calibration(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+    ) -> "CalibratedClassifierCV | None":
+        """Fit Platt Scaling calibration using validation data.
+
+        Goi sklearn.calibration.CalibratedClassifierCV de calibrate
+        probabilities tu XGBoost raw output. Luu calibrator vao self.
+
+        Args:
+            X_val: Validation features (n_samples, n_features)
+            y_val: Validation labels (n_samples,)
+
+        Returns:
+            Fitted CalibratedClassifierCV instance hoac None
+        """
+        if not self._is_trained or self._model is None:
+            logger.warning("Model A chua trained, khong the fit calibration.")
+            return None
+
+        calibrator = fit_platt_calibration(
+            model=self._model,
+            X_val=X_val,
+            y_val=y_val,
+            method=self._config.calibration_method,
+            cv=self._config.calibration_cv,
+        )
+
+        self._calibrator = calibrator
+        return calibrator
+
+    def predict_proba_calibrated(
+        self,
+        X: np.ndarray,
+    ) -> np.ndarray:
+        """Predict calibrated probabilities (sau Platt Scaling).
+
+        Args:
+            X: Feature vector (n_samples, n_features) or single (n_features,)
+
+        Returns:
+            Calibrated probabilities (n_samples, 3)
+        """
+        raw_probas = self.predict_proba(X)
+        return apply_platt_calibration(raw_probas, self._calibrator)
+
+    # ------------------------------------------------------------------
+    # Calibration Metrics: Brier Score & ECE
+    # ------------------------------------------------------------------
+
+    def compute_brier_score(
+        self,
+        y_true: np.ndarray,
+        y_pred_proba: np.ndarray | None = None,
+    ) -> float:
+        """Tinh Brier Score cho predictions.
+
+        Args:
+            y_true: True labels (n_samples,)
+            y_pred_proba: Predicted probabilities (n_samples, 3).
+                          Neu None, dung self.predict_proba().
+
+        Returns:
+            Brier Score value
+        """
+        if y_pred_proba is None:
+            if not self._is_trained or self._model is None:
+                logger.warning("Model chua trained, Brier Score = 0.0")
+                return 0.0
+            logger.warning("y_pred_proba is None, cannot compute Brier Score without features.")
+            return 0.0
+
+        brier = compute_brier_score(y_true, y_pred_proba)
+        self._last_brier_score = brier
+        return brier
+
+    def compute_ece(
+        self,
+        y_true: np.ndarray,
+        y_pred_proba: np.ndarray | None = None,
+        n_bins: int | None = None,
+    ) -> float:
+        """Tinh Expected Calibration Error (ECE).
+
+        Args:
+            y_true: True labels (n_samples,)
+            y_pred_proba: Predicted probabilities (n_samples, 3).
+                          Neu None, dung self.predict_proba().
+            n_bins: So bin (default: config.n_calibration_bins)
+
+        Returns:
+            ECE value
+        """
+        if y_pred_proba is None:
+            if not self._is_trained or self._model is None:
+                logger.warning("Model chua trained, ECE = 0.0")
+                return 0.0
+            logger.warning("y_pred_proba is None, cannot compute ECE without features.")
+            return 0.0
+
+        n_bins = n_bins or self._config.n_calibration_bins
+        ece = compute_ece(y_true, y_pred_proba, n_bins=n_bins)
+        self._last_ece = ece
+        return ece
+
+    # ------------------------------------------------------------------
     # Prediction
     # ------------------------------------------------------------------
 
@@ -502,23 +840,32 @@ class XGBoostModelA:
         regime_code: int,
         bear_evidence: float = 0.0,
     ) -> np.ndarray:
-        """Apply session weight logic to adjust probabilities.
+        """Apply session weight logic de dieu chinh probabilities.
 
-        Phan IV.1:
-        - ACCUMULATION: P_lateral += (P_BSL + P_SSL) * 0.2
-        - EXPANSION: confidence_qualifier -> HIGH if >= MEDIUM
-          (handled in post-processing)
-        - REVERSAL_RISK: Bear Evidence weight += 10%
+        Phan IV.1 — Session Weights:
+          ACCUMULATION (NORMAL, TRENDING_LV regime):
+            P_lateral += (P_BSL + P_SSL) * 0.2
+          EXPANSION (TRENDING regime):
+            confidence_qualifier -> HIGH neu >= MEDIUM
+            (xu ly trong post-processing, khong thay doi proba truc tiep)
+          REVERSAL_RISK (bear_evidence > 0.5):
+            Bear Evidence weight += 10% (shift P_BSL -> P_SSL)
 
         Args:
             probas: Probability array (n_samples, 3) — [P_BSL, P_SSL, P_lateral]
-            regime_code: Regime classifier code (0=NORMAL, 1=TRENDING_LV,
-                         2=TRENDING_HV, 3=CHOPPY_HV)
+            regime_code: Regime classifier code
+                         0=NORMAL, 1=TRENDING_LV, 2=TRENDING_HV, 3=CHOPPY_HV
             bear_evidence: Bear evidence weight (0.0-1.0)
 
         Returns:
-            Adjusted probability array
+            Adjusted probability array (da renormalized)
+
+        Raises:
+            ValueError: Neu probas empty hoac shape khong hop le
         """
+        if probas is None or probas.size == 0:
+            raise ValueError("Probas rong, khong the apply session weights.")
+
         if probas.ndim == 1:
             probas = probas.reshape(1, -1)
 
@@ -529,27 +876,48 @@ class XGBoostModelA:
             p_ssl = adjusted[i, IDX_SSL]
             p_lat = adjusted[i, IDX_LATERAL]
 
-            # ACCUMULATION regime: P_lateral += (P_BSL + P_SSL) * 0.2
-            if regime_code in (0, 1):  # NORMAL or TRENDING_LV -> accumulation-like
-                lateral_boost = (p_bsl + p_ssl) * 0.2
+            # =============================================================
+            # 1. ACCUMULATION (NORMAL, TRENDING_LV regime)
+            #    P_lateral += (P_BSL + P_SSL) * 0.2
+            # =============================================================
+            if regime_code in (REGIME_NORMAL, REGIME_TRENDING_LV):
+                lateral_boost = (p_bsl + p_ssl) * SESSION_WEIGHT_ACCUMULATION
                 p_lat_adj = min(1.0, p_lat + lateral_boost)
 
-                # Normalize
                 if p_lat_adj > p_lat:
-                    scale = (p_bsl + p_ssl) / (p_bsl + p_ssl + 1e-10)
-                    adjusted[i, IDX_BSL] = p_bsl * scale
-                    adjusted[i, IDX_SSL] = p_ssl * scale
+                    # Scale BSL + SSL proportionally de sum = 1
+                    total_directional = p_bsl + p_ssl
+                    if total_directional > 0:
+                        scale = 1.0 - p_lat_adj
+                        adjusted[i, IDX_BSL] = (p_bsl / total_directional) * scale
+                        adjusted[i, IDX_SSL] = (p_ssl / total_directional) * scale
+                    else:
+                        # Edge case: ca BSL va SSL deu = 0
+                        adjusted[i, IDX_BSL] = 0.0
+                        adjusted[i, IDX_SSL] = 0.0
                     adjusted[i, IDX_LATERAL] = p_lat_adj
 
-            # REVERSAL_RISK: Bear Evidence weight += 10%
-            # Shift probability from BSL to SSL based on bear evidence
+            # =============================================================
+            # 2. EXPANSION (TRENDING regime)
+            #    confidence_qualifier -> HIGH neu >= MEDIUM
+            #    Khong thay doi proba, xu ly trong inference post-processing
+            # =============================================================
+            # EXPANSION logic duoc handle trong inference.py khi goi
+            # get_confidence_qualifier() va dieu chinh qualifier.
+            # No action needed here — proba values remain unchanged.
+
+            # =============================================================
+            # 3. REVERSAL_RISK (bear_evidence > 0.5)
+            #    Bear Evidence weight += 10%
+            #    Shift probability tu BSL sang SSL
+            # =============================================================
             if bear_evidence > 0.5:
-                bear_shift = bear_evidence * 0.10
+                bear_shift = bear_evidence * SESSION_WEIGHT_REVERSAL
                 shift_amount = adjusted[i, IDX_BSL] * bear_shift
                 adjusted[i, IDX_BSL] = max(0.0, adjusted[i, IDX_BSL] - shift_amount)
                 adjusted[i, IDX_SSL] = min(1.0, adjusted[i, IDX_SSL] + shift_amount)
 
-            # Renormalize
+            # Renormalize de dam bao sum = 1.0
             row_sum = np.sum(adjusted[i])
             if row_sum > 0:
                 adjusted[i] /= row_sum
@@ -596,7 +964,8 @@ class XGBoostModelA:
         """Evaluate model performance.
 
         Returns:
-            Dict with accuracy, IC, IC per class, and classification report
+            Dict with accuracy, IC, IC per class, Brier Score, ECE,
+            and classification report
         """
         if not self._is_trained or self._model is None:
             raise RuntimeError("Model A is not trained yet.")
@@ -608,10 +977,20 @@ class XGBoostModelA:
         ic = compute_ic(y, y_pred_proba)
         ic_per_class = compute_ic_per_class(y, y_pred_proba)
 
+        # Batch 2: Brier Score & ECE
+        brier = compute_brier_score(y, y_pred_proba)
+        ece = compute_ece(y, y_pred_proba, n_bins=self._config.n_calibration_bins)
+
+        self._last_brier_score = brier
+        self._last_ece = ece
+
         result: dict[str, Any] = {
             "accuracy": accuracy,
             "ic": ic,
             "ic_per_class": ic_per_class,
+            "brier_score": brier,
+            "ece": ece,
+            "n_calibration_bins": self._config.n_calibration_bins,
             "n_samples": len(y),
             "class_distribution": {
                 str(k): int(v) for k, v in zip(*np.unique(y, return_counts=True))

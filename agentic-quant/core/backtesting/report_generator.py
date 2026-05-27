@@ -42,6 +42,11 @@ class BacktestReport:
         regime_shift_log: Lich su regime shift
         overfitting_check: Ket qua kiem tra overfitting
         trades: Danh sach trades (neu co)
+        win_rate: Ty le thang (0.0 -> 1.0)
+        profit_factor: Ty so loi nhuan / thua lo
+        sharpe_ratio: Sharpe ratio (annualized, 252 ngay)
+        max_drawdown: Drawdown lon nhat (0.0 -> 1.0)
+        avg_hold_bars: So bars trung binh giu mot trade
     """
     report_id: str = ""
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -76,8 +81,10 @@ class BacktestReport:
     trades: list[dict] = field(default_factory=list)
     total_trades: int = 0
     win_rate: float = 0.0
+    profit_factor: float = 0.0
     sharpe_ratio: float = 0.0
     max_drawdown: float = 0.0
+    avg_hold_bars: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """Chuyen report thanh dict de serialize.
@@ -106,8 +113,10 @@ class BacktestReport:
             "overfitting_check": self.overfitting_check,
             "total_trades": self.total_trades,
             "win_rate": self.win_rate,
+            "profit_factor": self.profit_factor,
             "sharpe_ratio": self.sharpe_ratio,
             "max_drawdown": self.max_drawdown,
+            "avg_hold_bars": self.avg_hold_bars,
         }
 
     def summary(self) -> str:
@@ -150,8 +159,10 @@ class BacktestReport:
             "--- Trades ---",
             f"  Total: {self.total_trades}",
             f"  Win rate: {self.win_rate:.2%}",
-            f"  Sharpe: {self.sharpe_ratio:.2f}",
+            f"  Profit factor: {self.profit_factor:.2f}",
+            f"  Sharpe (ann.): {self.sharpe_ratio:.2f}",
             f"  Max DD: {self.max_drawdown:.2%}",
+            f"  Avg hold bars: {self.avg_hold_bars:.1f}",
         ])
 
         return "\n".join(lines)
@@ -373,8 +384,10 @@ class BacktestReportGenerator:
         report.trades = self._trades
         report.total_trades = len(self._trades)
         report.win_rate = self._compute_win_rate()
+        report.profit_factor = self._compute_profit_factor()
         report.sharpe_ratio = self._compute_sharpe()
         report.max_drawdown = self._compute_max_drawdown()
+        report.avg_hold_bars = self._compute_avg_hold_bars()
 
         logger.info(
             "[ReportGenerator] Report {id}: IC_mean={ic:.4f}, "
@@ -513,6 +526,9 @@ class BacktestReportGenerator:
     def _compute_win_rate(self) -> float:
         """Tinh win rate tu danh sach trades.
 
+        Trade co outcome='BSL_HIT' (Buy Stop Loss hit) duoc tinh la WIN.
+        Trade co outcome='SSL_HIT' (Sell Stop Loss hit) duoc tinh la LOSS.
+
         Returns:
             float: Win rate (0.0 -> 1.0)
         """
@@ -521,15 +537,43 @@ class BacktestReportGenerator:
 
         wins = sum(
             1 for t in self._trades
-            if t.get("pnl", 0) > 0 or t.get("outcome", "") in ("WIN", "BSL_HIT", "PROFIT")
+            if t.get("pnl", 0) > 0
+            or t.get("outcome", "") in ("WIN", "BSL_HIT", "PROFIT")
         )
         return wins / len(self._trades)
 
-    def _compute_sharpe(self) -> float:
-        """Tinh Sharpe ratio tu danh sach trades.
+    def _compute_profit_factor(self) -> float:
+        """Tinh profit factor = tong loi nhuan / tong thua lo.
 
         Returns:
-            float: Sharpe ratio
+            float: Profit factor (>1.0 = co loi)
+        """
+        if not self._trades:
+            return 0.0
+
+        gross_profit = 0.0
+        gross_loss = 0.0
+
+        for t in self._trades:
+            pnl = t.get("pnl", 0.0)
+            if pnl > 0:
+                gross_profit += pnl
+            else:
+                gross_loss += abs(pnl)
+
+        if gross_loss < 1e-12:
+            return gross_profit if gross_profit > 0 else 0.0
+
+        return float(gross_profit / gross_loss)
+
+    def _compute_sharpe(self) -> float:
+        """Tinh Sharpe ratio annualized tu danh sach trades.
+
+        Sharpe = mean(returns) / std(returns) * sqrt(252)
+        Su dung returns (PnL / equity) neu co equity, hoac PnL raw.
+
+        Returns:
+            float: Sharpe ratio annualized (252 ngay)
         """
         import numpy as np
 
@@ -546,12 +590,15 @@ class BacktestReportGenerator:
         if std_pnl < 1e-12:
             return 0.0
 
-        # Sharpe = mean(pnl) / std(pnl) * sqrt(periods)
-        # Mac dinh period scaling = 1 (raw)
-        return float(mean_pnl / std_pnl)
+        # Sharpe = mean(pnl) / std(pnl) * sqrt(252)
+        # Gia dinh moi trade la 1 ngay giao dich (de annualize)
+        return float(mean_pnl / std_pnl * np.sqrt(252))
 
     def _compute_max_drawdown(self) -> float:
         """Tinh max drawdown tu danh sach trades.
+
+        Max drawdown = max(peak - trough) / peak
+        Tinh tren equity curve cumulative.
 
         Returns:
             float: Max drawdown (0.0 -> 1.0)
@@ -562,7 +609,7 @@ class BacktestReportGenerator:
             return 0.0
 
         cumulative = 0.0
-        peak = 0.0
+        peak = -float("inf")
         max_dd = 0.0
 
         for t in self._trades:
@@ -570,8 +617,47 @@ class BacktestReportGenerator:
             cumulative += pnl
             if cumulative > peak:
                 peak = cumulative
-            dd = (peak - cumulative) / (peak + 1e-12)
+            if peak > 0:
+                dd = (peak - cumulative) / peak
+            else:
+                dd = 0.0
             if dd > max_dd:
                 max_dd = dd
 
         return float(max_dd)
+
+    def _compute_avg_hold_bars(self) -> float:
+        """Tinh so bars trung binh giu mot trade.
+
+        Lay tu field 'hold_bars' trong trade dict, neu khong co thi tinh
+        tu (exit_time - entry_time) / bar_seconds.
+
+        Returns:
+            float: So bars trung binh
+        """
+        if not self._trades:
+            return 0.0
+
+        hold_bars_list = []
+        for t in self._trades:
+            hb = t.get("hold_bars", None)
+            if hb is not None:
+                hold_bars_list.append(float(hb))
+            else:
+                # Tu tinh neu co entry_time va exit_time
+                entry = t.get("entry_time")
+                exit_t = t.get("exit_time")
+                if entry and exit_t:
+                    import datetime as dt_mod
+                    if isinstance(entry, str):
+                        entry = dt_mod.datetime.fromisoformat(entry)
+                    if isinstance(exit_t, str):
+                        exit_t = dt_mod.datetime.fromisoformat(exit_t)
+                    if isinstance(entry, dt_mod.datetime) and isinstance(exit_t, dt_mod.datetime):
+                        seconds = (exit_t - entry).total_seconds()
+                        hold_bars_list.append(seconds / 60.0)  # mac dinh 1 bar = 1 phut
+
+        if not hold_bars_list:
+            return 0.0
+
+        return float(sum(hold_bars_list) / len(hold_bars_list))

@@ -21,6 +21,7 @@ from core.ipc.message_schema import (
     CountdownUpdateMessage,
     FullStateSnapshotMessage,
 )
+from core.memory.short_term.redis_cache_manager import RedisCacheManager
 from core.utils.events import get_event_bus
 from core.utils.events.types import EventType
 
@@ -47,6 +48,7 @@ class WebSocketServer:
         host: str = "127.0.0.1",
         port_start: int = 47290,
         port_end: int = 47299,
+        redis_cache: RedisCacheManager | None = None,
     ) -> None:
         self._host = host
         self._port_start = port_start
@@ -56,9 +58,11 @@ class WebSocketServer:
         self._clients: set[ServerConnection] = set()
         self._broadcast_dispatcher: BroadcastDispatcher | None = None
         self._stop_event = asyncio.Event()
+        self._redis_cache: RedisCacheManager | None = redis_cache
 
         logger.info(
-            f"WebSocketServer khoi tao: {host}:{port_start}-{port_end}"
+            f"WebSocketServer khoi tao: {host}:{port_start}-{port_end} "
+            f"(redis={'co' if redis_cache else 'khong'})"
         )
 
     # ------------------------------------------------------------------
@@ -196,23 +200,264 @@ class WebSocketServer:
         else:
             logger.debug(f"Unknown message type tu client: {msg_type}")
 
+    async def _build_full_state(self) -> FullStateSnapshotMessage:
+        """Xay dung FullStateSnapshotMessage tu Redis/SQLite.
+
+        Thu lay du lieu tu Redis truoc:
+          - bars: {tf: [ohlcv]} — lay 500 bar gan nhat moi TF
+          - zones: list[dict] — zone dang active
+          - predictions: dict — AI prediction moi nhat
+          - consensus: dict — debate/consensus record
+          - macro_context: dict — macro state + events
+          - model_status: str — trang thai model (healthy/degraded)
+
+        Fallback: neu Redis ko available, tra ve empty snapshot
+        voi system status = "running" + warning logged.
+
+        Returns:
+            FullStateSnapshotMessage: snapshot hien tai
+        """
+        bars: list[dict[str, Any]] = []
+        zones: list[dict[str, Any]] = []
+        predictions: dict[str, Any] = {}
+        consensus: dict[str, Any] = {}
+        macro_context: dict[str, Any] = {}
+        model_status: str = "healthy"
+
+        if self._redis_cache is not None and self._redis_cache.is_connected:
+            try:
+                redis = self._redis_cache.client
+
+                # --- Bars: scan tung TF, lay 500 bar moi nhat ---
+                timeframes = ["M1", "M5", "M15", "H1", "H4", "D1"]
+                for tf in timeframes:
+                    try:
+                        bar_keys = []
+                        async for key in redis.scan_iter(
+                            match=f"bar:{tf}:*", count=500
+                        ):
+                            key_str = key.decode() if isinstance(key, bytes) else key
+                            bar_keys.append(key_str)
+
+                        if not bar_keys:
+                            continue
+
+                        # Lay bars, sort theo thoi gian va gioi han 500
+                        for bk in sorted(bar_keys)[:500]:
+                            raw = await redis.hgetall(bk)
+                            if raw:
+                                decoded = {
+                                    k.decode(): self._decode_redis_val(v)
+                                    for k, v in raw.items()
+                                }
+                                decoded["tf"] = tf
+                                bars.append(decoded)
+                    except Exception as e:
+                        logger.warning(
+                            f"Loi lay bars cho TF {tf}: {e}"
+                        )
+                        continue
+
+                # --- Zones: quet zone keys ---
+                try:
+                    zone_keys = []
+                    async for key in redis.scan_iter(
+                        match=f"zone:*", count=1000
+                    ):
+                        zone_keys.append(
+                            key.decode() if isinstance(key, bytes) else key
+                        )
+                    for zk in zone_keys:
+                        raw = await redis.hgetall(zk)
+                        if raw:
+                            decoded = {
+                                k.decode(): self._decode_redis_val(v)
+                                for k, v in raw.items()
+                            }
+                            zones.append(decoded)
+                except Exception as e:
+                    logger.warning(f"Loi lay zones tu Redis: {e}")
+
+                # --- Predictions (AI Output) ---
+                try:
+                    # Doc prediction cho symbol mac dinh
+                    for symbol in ["XAUUSD", "EURUSD"]:
+                        pred_key = f"ai:output:{symbol}:latest"
+                        raw = await redis.hgetall(pred_key)
+                        if raw:
+                            decoded = {
+                                k.decode(): self._decode_redis_val(v)
+                                for k, v in raw.items()
+                            }
+                            predictions[symbol] = decoded
+                except Exception as e:
+                    logger.warning(
+                        f"Loi lay predictions tu Redis: {e}"
+                    )
+
+                # --- Consensus / Debate ---
+                try:
+                    async for key in redis.scan_iter(
+                        match="debate:*", count=100
+                    ):
+                        key_str = (
+                            key.decode() if isinstance(key, bytes) else key
+                        )
+                        raw = await redis.hgetall(key_str)
+                        if raw:
+                            decoded = {
+                                k.decode(): self._decode_redis_val(v)
+                                for k, v in raw.items()
+                            }
+                            consensus[key_str] = decoded
+                except Exception as e:
+                    logger.warning(
+                        f"Loi lay consensus tu Redis: {e}"
+                    )
+
+                # --- Macro State ---
+                try:
+                    async for key in redis.scan_iter(
+                        match="macro:state:*", count=50
+                    ):
+                        key_str = (
+                            key.decode() if isinstance(key, bytes) else key
+                        )
+                        raw = await redis.hgetall(key_str)
+                        if raw:
+                            decoded = {
+                                k.decode(): self._decode_redis_val(v)
+                                for k, v in raw.items()
+                            }
+                            currency = key_str.split(":")[-1]
+                            macro_context[currency] = decoded
+                except Exception as e:
+                    logger.warning(
+                        f"Loi lay macro state tu Redis: {e}"
+                    )
+
+                # --- Macro Events ---
+                try:
+                    async for key in redis.scan_iter(
+                        match="macro:events:*", count=50
+                    ):
+                        key_str = (
+                            key.decode() if isinstance(key, bytes) else key
+                        )
+                        events_raw = await redis.lrange(
+                            key_str, 0, -1
+                        )
+                        if events_raw:
+                            currency = key_str.split(":")[1]
+                            events = []
+                            for ev_bytes in events_raw:
+                                try:
+                                    ev = json.loads(
+                                        ev_bytes.decode("utf-8")
+                                    )
+                                    events.append(ev)
+                                except Exception:
+                                    pass
+                            if "events" not in macro_context:
+                                macro_context["events"] = {}
+                            macro_context["events"][currency] = events
+                except Exception as e:
+                    logger.warning(
+                        f"Loi lay macro events tu Redis: {e}"
+                    )
+
+                # --- Model Status ---
+                try:
+                    metrics_key = "metrics:model:latest"
+                    raw = await redis.hgetall(metrics_key)
+                    if raw:
+                        decoded = {
+                            k.decode(): self._decode_redis_val(v)
+                            for k, v in raw.items()
+                        }
+                        if decoded.get("degraded", "false") == "true":
+                            model_status = "degraded"
+                except Exception as e:
+                    logger.warning(
+                        f"Loi lay model status tu Redis: {e}"
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    f"Redis unavailable for full state build: {e}"
+                )
+                # Fallback: tra ve empty state
+                bars = []
+                zones = []
+                predictions = {}
+                consensus = {}
+                macro_context = {}
+                model_status = "unknown"
+        else:
+            logger.info(
+                "Redis not configured/connected — building empty full state"
+            )
+
+        return FullStateSnapshotMessage(
+            symbol="XAUUSD",
+            bars=bars,
+            zones=zones,
+            predictions=predictions,
+            consensus=consensus,
+            system={
+                "status": "running",
+                "model_status": model_status,
+                "bar_count": len(bars),
+                "zone_count": len(zones),
+                "redis_connected": (
+                    self._redis_cache.is_connected
+                    if self._redis_cache
+                    else False
+                ),
+            },
+            timestamp=int(time.time()),
+        )
+
     async def _send_full_state(
         self, websocket: ServerConnection
     ) -> None:
         """Gui FullStateSnapshotMessage cho client.
 
-        TODO: Lay du lieu tu Redis/cache de fill snapshot.
-        Hien tai gui snapshot voi du lieu empty.
+        Goi _build_full_state() de thu thap trang thai hien tai
+        tu Redis, sau do serialize va gui qua WebSocket.
         """
-        msg = FullStateSnapshotMessage(
-            system={
-                "status": "running",
-                "uptime_ms": 0,
-            },
-            timestamp=int(time.time()),
-        )
+        msg = await self._build_full_state()
         await self._send_json(websocket, msg.model_dump())
-        logger.debug("Da gui full_state_snapshot cho client")
+        logger.debug(
+            f"Da gui full_state_snapshot cho client "
+            f"(bars={len(msg.bars)}, zones={len(msg.zones)}, "
+            f"predictions={len(msg.predictions)}, "
+            f"system_status={msg.system.get('status', 'unknown')})"
+        )
+
+    @staticmethod
+    def _decode_redis_val(value: Any) -> Any:
+        """Giai ma gia tri tu Redis (bytes -> int/float/str).
+
+        Args:
+            value: Gia tri tu Redis (bytes, int, float, str)
+
+        Returns:
+            Gia tri da decode
+        """
+        if isinstance(value, bytes):
+            try:
+                decoded = value.decode("utf-8")
+                # Thu ep kieu so
+                try:
+                    if "." in decoded:
+                        return float(decoded)
+                    return int(decoded)
+                except (ValueError, TypeError):
+                    return decoded
+            except UnicodeDecodeError:
+                return str(value)
+        return value
 
     # ------------------------------------------------------------------
     # Broadcast

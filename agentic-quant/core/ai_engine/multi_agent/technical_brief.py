@@ -22,8 +22,14 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+# Tich hop RAG Retriever thuc te
+try:
+    from core.memory.long_term.rag_retriever import RAGRetriever, Precedent
+except ImportError:
+    RAGRetriever = None  # type: ignore
+    Precedent = None  # type: ignore
+
 if TYPE_CHECKING:
-    from core.memory.long_term.rag_retriever import Precedent
     from core.ai_engine.feature_engineering.pipeline import FeatureOutput
 
 
@@ -424,30 +430,50 @@ class TechnicalBrief:
         """Xay dung section: Precedents (RAG).
 
         Bao gom: cac debate tuong tu trong qua khu, outcome cua chung.
+        Tich hop voi RAGRetriever.retrieve_precedents() thuc te.
+        Neu RAG fail (exception), skip precedents section, khong crash.
         """
         lines: list[str] = [
             "=== PRECEDENTS (RAG) ===",
         ]
 
-        if not precedents:
-            lines.append("No precedents found.")
+        try:
+            if not precedents:
+                lines.append("No precedents found.")
+                return "\n".join(lines)
+
+            lines.append(f"Similar Precedents Found: {len(precedents)}")
+            for i, p in enumerate(precedents[:5], 1):
+                # Precedent co the la object (Precedent dataclass) hoac dict
+                try:
+                    if hasattr(p, "to_dict"):
+                        pd = p.to_dict()
+                    elif isinstance(p, dict):
+                        pd = p
+                    else:
+                        pd = {}
+
+                    direction = pd.get("direction", "?")
+                    rating = pd.get("rating", 0)
+                    outcome = pd.get("outcome", pd.get("actual_outcome", "?"))
+                    sim = pd.get("cosine_sim", pd.get("re_rank_score", 0))
+
+                    lines.append(
+                        f"  #{i}: {pd.get('symbol', '?')} | "
+                        f"Direction: {direction} | "
+                        f"Rating: {rating:+d} | "
+                        f"Outcome: {outcome} | "
+                        f"Similarity: {sim:.2f}"
+                    )
+                except Exception as item_err:
+                    logger.warning(f"TechnicalBrief: error processing precedent #{i}: {item_err}")
+                    lines.append(f"  #{i}: <error processing precedent>")
+
+        except Exception as e:
+            # Neu RAG fail (exception), skip precedents section, khong crash
+            logger.warning(f"TechnicalBrief: RAG precedents error, skipping section: {e}")
+            lines.append("Precedents unavailable due to RAG error.")
             return "\n".join(lines)
-
-        lines.append(f"Similar Precedents Found: {len(precedents)}")
-        for i, p in enumerate(precedents[:5], 1):
-            # Precedent co the la object hoac dict
-            if hasattr(p, "to_dict"):
-                pd = p.to_dict()
-            elif isinstance(p, dict):
-                pd = p
-            else:
-                pd = {}
-
-            lines.append(f"  #{i}: {pd.get('symbol', '?')} | "
-                         f"Direction: {pd.get('direction', '?')} | "
-                         f"Rating: {pd.get('rating', 0):+d} | "
-                         f"Outcome: {pd.get('outcome', '?')} | "
-                         f"Similarity: {pd.get('cosine_sim', 0):.2f}")
 
         return "\n".join(lines)
 

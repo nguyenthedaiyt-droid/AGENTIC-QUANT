@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -57,6 +58,17 @@ class BroadcastDispatcher:
         self._bus = event_bus
         self._broadcast_fn: Callable[[dict[str, Any]], None] | None = None
         self._unsubscribe: Callable[[], None] | None = None
+        self._msgpack_available: bool = False
+
+        # Thu import msgpack, fallback ve JSON
+        try:
+            import msgpack  # noqa: F401
+            self._msgpack_available = True
+        except ImportError:
+            self._msgpack_available = False
+            logger.warning(
+                "msgpack khong co san — fallback ve JSON serialization"
+            )
 
         # --- Throttle state ---
         self._last_bar_update_ms: int = 0
@@ -317,11 +329,44 @@ class BroadcastDispatcher:
         self._broadcast_fn(msg.model_dump())
 
     # ------------------------------------------------------------------
+    # Serialization helpers (MessagePack fallback)
+    # ------------------------------------------------------------------
+
+    def serialize_message(self, message: dict[str, Any]) -> tuple[bytes, bool]:
+        """Serialize dict message, thu MessagePack truoc, fallback JSON.
+
+        Args:
+            message: Dict can serialize
+
+        Returns:
+            Tuple (serialized_bytes, is_msgpack)
+        """
+        if self._msgpack_available:
+            try:
+                import msgpack
+
+                packed: bytes = msgpack.packb(message, use_bin_type=True)  # type: ignore[assignment]
+                return packed, True
+            except Exception:
+                logger.debug(
+                    "MessagePack serialization failed, fallback to JSON"
+                )
+
+        # JSON fallback
+        raw_str = json.dumps(message, default=str)
+        return raw_str.encode("utf-8"), False
+
+    # ------------------------------------------------------------------
     # Broadcast (goi tu WebSocketServer)
     # ------------------------------------------------------------------
 
     def broadcast(self, message: dict[str, Any]) -> None:
-        """Broadcast truc tiep mot dict message (goi tu ben ngoai)."""
+        """Broadcast truc tiep mot dict message (goi tu ben ngoai).
+
+        Tu dong dung MessagePack neu co san, fallback ve JSON.
+        Phat hien client disconnect: broadcast_fn xu ly cleanup
+        (WebSocketServer _broadcast_to_all discard client khi loi).
+        """
         if self._broadcast_fn is not None:
             self._broadcast_fn(message)
         else:

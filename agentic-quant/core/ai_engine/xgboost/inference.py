@@ -2,6 +2,7 @@
 # AGENTIC-QUANT — XGBoost Inference Engines (Phase 6.4)
 # Inference Engine A (direction) + Inference Engine B (zone hold)
 # + Rollback Controller (3 versions: standard, aggressive, conservative)
+# Batch 2: Session weight post-processing pipeline + calibrated inference
 # =============================================================================
 
 from __future__ import annotations
@@ -17,12 +18,30 @@ if TYPE_CHECKING:
     from core.ai_engine.xgboost.model_a import XGBoostModelA
     from core.ai_engine.xgboost.model_b import XGBoostModelB
     from core.ai_engine.xgboost.ensemble import XGBoostEnsemble
+    from core.ai_engine.xgboost.model_a import (
+        apply_platt_calibration,
+        compute_brier_score,
+        compute_ece,
+    )
+    from core.ai_engine.xgboost.model_b import (
+        apply_isotonic_calibration,
+        compute_ece_per_regime,
+    )
 else:
     # Lazy imports to avoid circular deps at import time
     from core.ai_engine.xgboost.feature_builder import XGBoostFeatures
     from core.ai_engine.xgboost.model_a import XGBoostModelA
     from core.ai_engine.xgboost.model_b import XGBoostModelB
     from core.ai_engine.xgboost.ensemble import XGBoostEnsemble
+    from core.ai_engine.xgboost.model_a import (
+        apply_platt_calibration,
+        compute_brier_score,
+        compute_ece,
+    )
+    from core.ai_engine.xgboost.model_b import (
+        apply_isotonic_calibration,
+        compute_ece_per_regime,
+    )
 
 
 # =============================================================================
@@ -187,6 +206,7 @@ class InferenceEngineA:
         regime_code: int = 0,
         bear_evidence: float = 0.0,
         apply_session_weights: bool = True,
+        use_calibrated: bool = False,
     ) -> ModelAOutput:
         """Run inference with Model A.
 
@@ -195,6 +215,7 @@ class InferenceEngineA:
             regime_code: Market regime code
             bear_evidence: Bear evidence weight (0.0-1.0)
             apply_session_weights: Apply session weight adjustments
+            use_calibrated: Neu True, dung calibrated probabilities (Platt Scaling)
 
         Returns:
             ModelAOutput with probabilities and metadata
@@ -207,8 +228,11 @@ class InferenceEngineA:
         if X_A.ndim == 1:
             X_A = X_A.reshape(1, -1)
 
-        # Predict probabilities
-        probas = self._model_a.predict_proba(X_A)
+        # Predict probabilities (raw hoac calibrated)
+        if use_calibrated and self._model_a.calibrator is not None:
+            probas = self._model_a.predict_proba_calibrated(X_A)
+        else:
+            probas = self._model_a.predict_proba(X_A)
 
         # Apply session weights if requested
         if apply_session_weights:
@@ -226,18 +250,10 @@ class InferenceEngineA:
         max_prob = float(np.max(proba))
 
         # Confidence qualifier (Phan IV.1: EXPANSION -> HIGH if >= MEDIUM)
-        if max_prob >= CONFIDENCE_HIGH:
-            confidence_qualifier = "HIGH"
-        elif max_prob >= CONFIDENCE_MEDIUM:
-            confidence_qualifier = "MEDIUM"
-        else:
-            confidence_qualifier = "LOW"
-
-        # EXPANSION: if regime is trending and confidence is at least MEDIUM,
-        # upgrade to HIGH
-        if regime_code in (REGIME_TRENDING_LV, REGIME_TRENDING_HV):
-            if confidence_qualifier in ("MEDIUM", "HIGH"):
-                confidence_qualifier = "HIGH"
+        confidence_qualifier = self.session_weight_post_processing(
+            proba=proba,
+            regime_code=regime_code,
+        )
 
         predicted_label = ["BSL", "SSL", "LATERAL"][predicted_class]
 
@@ -253,6 +269,54 @@ class InferenceEngineA:
             regime_code=regime_code,
         )
 
+    def session_weight_post_processing(
+        self,
+        proba: np.ndarray,
+        regime_code: int,
+    ) -> str:
+        """Session weight post-processing pipeline.
+
+        Batch 2: Sau khi predict va apply session weights, xu ly
+        confidence qualifier dua tren regime context.
+
+        Phan IV.1 — Session Weights:
+          ACCUMULATION (NORMAL, TRENDING_LV):
+            P_lateral += (P_BSL + P_SSL) * 0.2 (da xu ly trong apply_session_weights)
+          EXPANSION (TRENDING regime: TRENDING_LV, TRENDING_HV):
+            confidence_qualifier -> HIGH neu max_prob >= MEDIUM
+          REVERSAL_RISK (bear_evidence > 0.5):
+            Bear Evidence weight += 10% (da xu ly trong apply_session_weights)
+
+        Args:
+            proba: Probability vector (3,) — [P_BSL, P_SSL, P_lateral]
+            regime_code: Market regime code
+
+        Returns:
+            Confidence qualifier: "HIGH", "MEDIUM", or "LOW"
+        """
+        if proba.ndim == 2:
+            proba = proba[0]
+
+        max_prob = float(np.max(proba))
+
+        # Base confidence qualifier tu probability threshold
+        if max_prob >= CONFIDENCE_HIGH:
+            qualifier = "HIGH"
+        elif max_prob >= CONFIDENCE_MEDIUM:
+            qualifier = "MEDIUM"
+        else:
+            qualifier = "LOW"
+
+        # =============================================================
+        # EXPANSION (TRENDING regime)
+        # Neu regime la trending va confidence >= MEDIUM, upgrade len HIGH
+        # =============================================================
+        if regime_code in (REGIME_TRENDING_LV, REGIME_TRENDING_HV):
+            if qualifier in ("MEDIUM", "HIGH"):
+                qualifier = "HIGH"
+
+        return qualifier
+
     # ------------------------------------------------------------------
     # Batch inference
     # ------------------------------------------------------------------
@@ -263,6 +327,7 @@ class InferenceEngineA:
         regime_codes: np.ndarray | None = None,
         bear_evidences: np.ndarray | None = None,
         apply_session_weights: bool = True,
+        use_calibrated: bool = False,
     ) -> list[ModelAOutput]:
         """Run batch inference with Model A.
 
@@ -271,6 +336,7 @@ class InferenceEngineA:
             regime_codes: Regime codes per sample (n_samples,)
             bear_evidences: Bear evidence per sample (n_samples,)
             apply_session_weights: Apply session weight adjustments
+            use_calibrated: Neu True, dung calibrated probabilities
 
         Returns:
             List of ModelAOutput per sample
@@ -292,6 +358,7 @@ class InferenceEngineA:
                 regime_code=int(regime_codes[i]),
                 bear_evidence=float(bear_evidences[i]),
                 apply_session_weights=apply_session_weights,
+                use_calibrated=use_calibrated,
             )
             results.append(result)
 
@@ -330,11 +397,14 @@ class InferenceEngineB:
     def predict(
         self,
         X_B: np.ndarray,
+        use_calibrated: bool = False,
     ) -> ModelBOutput:
         """Run inference with Model B.
 
         Args:
             X_B: Feature vector (560,) or (n_samples, 560)
+            use_calibrated: Neu True, dung calibrated probabilities
+                            (Isotonic Regression)
 
         Returns:
             ModelBOutput with P_hold, prediction, and confidence
@@ -346,12 +416,21 @@ class InferenceEngineB:
         if X_B.ndim == 1:
             X_B = X_B.reshape(1, -1)
 
-        probas = self._model_b.predict_proba(X_B)
-        p_not_hold = float(probas[0, 0])
-        p_hold = float(probas[0, 1])
-
-        predicted_hold = int(self._model_b.predict(X_B)[0])
-        confidence = float(self._model_b.predict_with_confidence(X_B)[0])
+        # Use calibrated probabilities if requested
+        if use_calibrated and self._model_b.isotonic_model is not None:
+            p_hold = self._model_b.predict_p_hold_calibrated(X_B)[0]
+            p_not_hold = 1.0 - p_hold
+            predicted_hold = int(p_hold >= self._model_b.theta_star)
+            confidence = abs(p_hold - self._model_b.theta_star) / max(
+                self._model_b.theta_star, 1.0 - self._model_b.theta_star
+            )
+            confidence = float(np.clip(confidence, 0.0, 1.0))
+        else:
+            probas = self._model_b.predict_proba(X_B)
+            p_not_hold = float(probas[0, 0])
+            p_hold = float(probas[0, 1])
+            predicted_hold = int(self._model_b.predict(X_B)[0])
+            confidence = float(self._model_b.predict_with_confidence(X_B)[0])
 
         return ModelBOutput(
             p_hold=p_hold,
@@ -368,10 +447,37 @@ class InferenceEngineB:
     def predict_batch(
         self,
         X_B: np.ndarray,
+        use_calibrated: bool = False,
     ) -> list[ModelBOutput]:
-        """Run batch inference with Model B."""
+        """Run batch inference with Model B.
+
+        Args:
+            X_B: Feature matrix (n_samples, 560)
+            use_calibrated: Neu True, dung calibrated probabilities
+
+        Returns:
+            List of ModelBOutput per sample
+        """
         if X_B.ndim == 1:
             X_B = X_B.reshape(1, -1)
+
+        if use_calibrated and self._model_b is not None and self._model_b.isotonic_model is not None:
+            p_holds = self._model_b.predict_p_hold_calibrated(X_B)
+            results: list[ModelBOutput] = []
+            for i in range(len(p_holds)):
+                p_h = float(p_holds[i])
+                results.append(ModelBOutput(
+                    p_hold=p_h,
+                    p_not_hold=1.0 - p_h,
+                    predicted_hold=int(p_h >= self._model_b.theta_star),
+                    confidence=float(np.clip(
+                        abs(p_h - self._model_b.theta_star) / max(
+                            self._model_b.theta_star, 1.0 - self._model_b.theta_star
+                        ), 0.0, 1.0
+                    )),
+                    theta_star=self._model_b.theta_star,
+                ))
+            return results
 
         probas = self._model_b.predict_proba(X_B)
         preds = self._model_b.predict(X_B)

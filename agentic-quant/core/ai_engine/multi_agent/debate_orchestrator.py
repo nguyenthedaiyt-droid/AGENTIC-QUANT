@@ -6,25 +6,25 @@
 Debate Orchestrator dieu phoi toan bo luong debate:
 
 Flow (timeout 8s total):
-1. RAG Retrieval (1s) — Lay precedents tu VectorDB
+1. RAG Retrieval (1s via asyncio.wait_for) — Lay precedents tu VectorDB
 2. Technical Brief (0.1s) — Build context
-3. Bull + Bear parallel (3s each via asyncio.gather)
-4. Critic (5s) — Tong hop consensus
+3. Bull + Bear parallel (3s each via asyncio.gather + asyncio.wait_for)
+4. Critic (5s via asyncio.wait_for) — Tong hop consensus
 5. Redis persist — Luu debate record voi TTL 1800s
 6. Publish CONSENSUS_READY event
 
 Trigger conditions:
 - BOS/MSS tren H1/H4 (Begin/End of Session)
-- Periodic 5 phut
+- Periodic 5 phut (background task via asyncio.create_task)
 - MAJOR_SURPRISE_FLAG
 
 Rate limit: 3 phut minimum interval.
-Cost tracking: log tokens + daily USD.
+Cost tracking: log token count + daily USD, max $5/day, skip debate if exceeded.
 
 Usage::
 
     orch = DebateOrchestrator(event_bus, rag_retriever, redis_manager)
-    await orch.start()  # Subscribe to events
+    await orch.start()  # Subscribe to events + start periodic loop
     # ... system chay ...
     await orch.shutdown()
 """
@@ -73,6 +73,9 @@ TIMEOUT_TOTAL = 8.0  # Tong timeout cho pipeline
 
 # Rate limit
 RATE_LIMIT_SECONDS = 180  # 3 phut minimum interval
+
+# Periodic trigger (5 phut)
+PERIODIC_INTERVAL_SECONDS = 300  # 5 phut
 
 # Redis
 DEBATE_TTL_SECONDS = 1800  # 30 phut
@@ -232,6 +235,7 @@ class DebateOrchestrator:
         self._last_debate_time: dict[str, float] = {}  # symbol -> timestamp
         self._cost_tracker = DailyCostTracker()
         self._is_running = False
+        self._periodic_task: asyncio.Task | None = None
         self._unsubscribe_callbacks: list[Callable[[], None]] = []
 
     # =========================================================================
@@ -259,7 +263,21 @@ class DebateOrchestrator:
         )
         self._unsubscribe_callbacks.append(unsub2)
 
+        # MAJOR_SURPRISE_FLAG duoc xu ly qua PREDICTION_READY event
+        # (surprise_direction field trong PredictionReadyEvent)
+
         self._is_running = True
+
+        # Start periodic debate loop (5 phut)
+        self._periodic_task = asyncio.create_task(
+            self._periodic_debate_loop(),
+            name="DebateOrchestratorPeriodic",
+        )
+        logger.debug(
+            f"DebateOrchestrator: periodic task started "
+            f"(interval={PERIODIC_INTERVAL_SECONDS}s)"
+        )
+
         logger.info(
             f"DebateOrchestrator: started. "
             f"Rate limit={RATE_LIMIT_SECONDS}s, "
@@ -272,6 +290,17 @@ class DebateOrchestrator:
             return
 
         logger.info("DebateOrchestrator: shutting down...")
+
+        # Cancel periodic task
+        if self._periodic_task and not self._periodic_task.done():
+            self._periodic_task.cancel()
+            try:
+                await self._periodic_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"Periodic task shutdown error: {e}")
+            self._periodic_task = None
         for cb in self._unsubscribe_callbacks:
             try:
                 cb()
@@ -280,6 +309,79 @@ class DebateOrchestrator:
         self._unsubscribe_callbacks.clear()
         self._is_running = False
         logger.info("DebateOrchestrator: stopped")
+
+    # =========================================================================
+    # Periodic Debate Loop
+    # =========================================================================
+    async def _periodic_debate_loop(self) -> None:
+        """
+        Background task chay moi 5 phut, trigger debate cho cac symbol
+        dang duoc theo doi.
+
+        Flow:
+        1. Sleep PERIODIC_INTERVAL_SECONDS (300s = 5 phut).
+        2. Lay danh sach symbol dang active.
+        3. Cho moi symbol: kiem tra rate limit, budget.
+        4. Neu OK: tao context va chay pipeline.
+
+        NOTE: Day la background task, exception khong duoc crash orchestrator.
+        """
+        logger.info(
+            f"DebateOrchestrator: periodic loop started "
+            f"(interval={PERIODIC_INTERVAL_SECONDS}s)"
+        )
+        while self._is_running:
+            try:
+                await asyncio.sleep(PERIODIC_INTERVAL_SECONDS)
+
+                if not self._is_running:
+                    break
+
+                # Lay symbol dang active (tu rate limit tracker)
+                active_symbols = list(self._last_debate_time.keys())
+                if not active_symbols:
+                    logger.debug("DebateOrchestrator: no active symbols for periodic trigger")
+                    continue
+
+                logger.debug(
+                    f"DebateOrchestrator: periodic trigger for {len(active_symbols)} symbol(s)"
+                )
+
+                for symbol in active_symbols:
+                    if not self._is_running:
+                        break
+                    if not self._check_rate_limit(symbol):
+                        logger.debug(
+                            f"DebateOrchestrator: periodic skip {symbol} (rate limited)"
+                        )
+                        continue
+                    if self._cost_tracker.is_over_budget:
+                        logger.warning(
+                            f"DebateOrchestrator: periodic skip {symbol} "
+                            f"(daily budget ${DAILY_BUDGET_USD} exceeded)"
+                        )
+                        continue
+
+                    # Tao context don gian va chay debate
+                    context = DebateContext(
+                        symbol=symbol,
+                        timeframe="H1",
+                        bar_close_time=int(time.time()),
+                        timestamp=int(time.time()),
+                    )
+                    # Chay pipeline (bat exception ben trong)
+                    await self._run_debate(context)
+
+            except asyncio.CancelledError:
+                logger.info("DebateOrchestrator: periodic loop cancelled")
+                break
+            except Exception as e:
+                logger.exception(
+                    f"DebateOrchestrator: periodic loop error: {e}"
+                )
+                # Tiep tuc loop, khong crash
+
+        logger.info("DebateOrchestrator: periodic loop stopped")
 
     # =========================================================================
     # Event Handlers
@@ -372,6 +474,14 @@ class DebateOrchestrator:
             f"{context.timeframe} (guardrail={context.active_guardrail})"
         )
 
+        # Double-check budget inside pipeline (extra safety)
+        if self._cost_tracker.is_over_budget:
+            logger.warning(
+                f"DebateOrchestrator: daily budget ${DAILY_BUDGET_USD} exceeded, "
+                f"aborting debate for {context.symbol}"
+            )
+            return
+
         try:
             # === Step 1: RAG Retrieval (1s) ===
             logger.debug("DebateOrchestrator: step 1/4 - RAG")
@@ -415,8 +525,8 @@ class DebateOrchestrator:
 
         except asyncio.TimeoutError:
             logger.error(
-                f"DebateOrchestrator: pipeline timeout for {context.symbol} "
-                f"({TIMEOUT_TOTAL}s)"
+                f"DebateOrchestrator: pipeline TOTAL TIMEOUT for {context.symbol} "
+                f"({TIMEOUT_TOTAL}s exceeded)"
             )
         except Exception as e:
             logger.exception(

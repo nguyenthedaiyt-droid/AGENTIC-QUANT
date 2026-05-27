@@ -3,6 +3,7 @@
 # Binary Classifier: P_hold (probability a zone will hold)
 # Cost-sensitive: scale_pos_weight for class imbalance
 # theta* = 0.71 decision threshold
+# Batch 2: Isotonic Regression Calibration + ECE per regime
 # =============================================================================
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from loguru import logger
 if TYPE_CHECKING:
     import xgboost as xgb
     from sklearn.metrics import classification_report
+    from sklearn.isotonic import IsotonicRegression
 else:
     try:
         import xgboost as xgb
@@ -26,6 +28,10 @@ else:
         from sklearn.metrics import classification_report
     except ImportError:
         classification_report = None  # type: ignore[assignment]
+    try:
+        from sklearn.isotonic import IsotonicRegression
+    except ImportError:
+        IsotonicRegression = None  # type: ignore[assignment]
 
 
 # =============================================================================
@@ -128,6 +134,215 @@ def compute_positive_rate(y_pred: np.ndarray) -> float:
 
 
 # =============================================================================
+# Calibration: Isotonic Regression
+# =============================================================================
+
+def fit_isotonic_calibration(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    out_of_bounds: str = "clip",
+) -> "IsotonicRegression | None":
+    """Fit Isotonic Regression calibration cho binary probabilities.
+
+    Su dung sklearn.isotonic.IsotonicRegression de calibrate
+    probabilities. Isotonic Regression la non-parametric method
+    fit piecewise constant mapping: P_cal = f(P_raw).
+
+    Args:
+        y_true: True binary labels (n_samples,) — 0=not_hold, 1=hold
+        y_pred_proba: Raw predicted probabilities (n_samples,) — P_hold
+        out_of_bounds: Xu ly out-of-bounds values: 'clip' (default) hoac 'nan'
+
+    Returns:
+        Fitted IsotonicRegression instance, hoac None neu fail
+    """
+    if IsotonicRegression is None:
+        logger.warning("sklearn.isotonic not available. Skipping Isotonic calibration.")
+        return None
+
+    if y_true is None or y_pred_proba is None or len(y_true) < 10:
+        logger.warning(
+            f"Data qua nho ({len(y_true) if y_true is not None else 0}), "
+            "bo qua Isotonic calibration."
+        )
+        return None
+
+    try:
+        iso_reg = IsotonicRegression(
+            out_of_bounds=out_of_bounds,
+            increasing=True,  # P_hold tang dan -> calibrated P_hold cung tang
+        )
+        iso_reg.fit(y_pred_proba, y_true)
+        logger.info(
+            f"Isotonic Regression fitted tren {len(y_true)} samples, "
+            f"out_of_bounds='{out_of_bounds}'"
+        )
+        return iso_reg
+    except Exception as e:
+        logger.error(f"Isotonic Regression fitting that bai: {e}")
+        return None
+
+
+def apply_isotonic_calibration(
+    y_pred_proba: np.ndarray,
+    isotonic_model: "IsotonicRegression | None",
+) -> np.ndarray:
+    """Apply Isotonic Regression calibration vao probabilities.
+
+    Args:
+        y_pred_proba: Raw predicted probabilities (n_samples,) — P_hold
+        isotonic_model: Fitted IsotonicRegression instance
+
+    Returns:
+        Calibrated probabilities (n_samples,), hoac original neu None
+    """
+    if isotonic_model is None:
+        return y_pred_proba
+
+    if y_pred_proba.size == 0:
+        return y_pred_proba
+
+    try:
+        calibrated = isotonic_model.transform(y_pred_proba)
+        # Clip to [0, 1] de dam bao valid probabilities
+        calibrated = np.clip(calibrated, 0.0, 1.0)
+        return calibrated
+    except Exception as e:
+        logger.warning(f"Apply Isotonic calibration that bai: {e}")
+        return y_pred_proba
+
+
+# =============================================================================
+# ECE per Regime
+# =============================================================================
+
+def compute_ece_binary(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    n_bins: int = 10,
+) -> float:
+    """Tinh Expected Calibration Error (ECE) cho binary classification.
+
+    ECE = sum_{k=1}^{K} (w_k * |acc_k - conf_k|)
+    - Chia [0,1] thanh K bins deu
+    - w_k = ty le samples trong bin k
+    - acc_k = accuracy trong bin k (ty le positive predictions dung)
+    - conf_k = avg confidence trong bin k
+
+    Args:
+        y_true: True binary labels (n_samples,) — 0=not_hold, 1=hold
+        y_pred_proba: Predicted probabilities (n_samples,) — P_hold
+        n_bins: So bin (default: 10)
+
+    Returns:
+        ECE value (float)
+    """
+    if len(y_true) == 0 or y_pred_proba.size == 0:
+        raise ValueError("Input rong, khong the tinh ECE.")
+
+    n_samples = len(y_true)
+    y_pred = (y_pred_proba >= 0.5).astype(np.int32)
+
+    bin_boundaries = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+
+    for k in range(n_bins):
+        in_bin = (y_pred_proba > bin_boundaries[k]) & (y_pred_proba <= bin_boundaries[k + 1])
+
+        if np.sum(in_bin) == 0:
+            continue
+
+        bin_accuracy = np.mean(y_pred[in_bin] == y_true[in_bin])
+        bin_confidence = np.mean(y_pred_proba[in_bin])
+        bin_weight = np.sum(in_bin) / n_samples
+
+        ece += bin_weight * abs(bin_accuracy - bin_confidence)
+
+    return ece
+
+
+def compute_ece_per_regime(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    regime_codes: np.ndarray,
+    n_bins: int = 10,
+    target_ece: float = 0.08,
+) -> dict[str, Any]:
+    """Tinh ECE rieng cho tung regime type.
+
+    Target: ECE < 0.08 per regime (spec requirement).
+
+    Args:
+        y_true: True binary labels (n_samples,) — 0=not_hold, 1=hold
+        y_pred_proba: Predicted probabilities (n_samples,) — P_hold
+        regime_codes: Regime codes per sample (n_samples,)
+        n_bins: So bin cho ECE (default: 10)
+        target_ece: Target ECE threshold (default: 0.08)
+
+    Returns:
+        Dict:
+            {
+                "ece_per_regime": {regime_name: ece_value},
+                "max_ece": max ECE across regimes,
+                "mean_ece": average ECE across regimes,
+                "regimes_below_target": [regime names with ECE < target],
+                "regimes_above_target": [regime names with ECE >= target],
+                "all_below_target": bool (True if all regimes < target)
+            }
+    """
+    regime_names = {0: "NORMAL", 1: "TRENDING_LV", 2: "TRENDING_HV", 3: "CHOPPY_HV"}
+    unique_regimes = np.unique(regime_codes)
+
+    ece_per_regime: dict[str, float] = {}
+    regimes_below: list[str] = []
+    regimes_above: list[str] = []
+
+    for regime in unique_regimes:
+        mask = regime_codes == regime
+        regime_y_true = y_true[mask]
+        regime_probas = y_pred_proba[mask]
+
+        if len(regime_y_true) < 5:
+            logger.debug(f"Regime {regime_names.get(int(regime), str(regime))} co qua it samples ({len(regime_y_true)}), skip.")
+            continue
+
+        try:
+            ece_val = compute_ece_binary(regime_y_true, regime_probas, n_bins=n_bins)
+            regime_name = regime_names.get(int(regime), f"REGIME_{int(regime)}")
+            ece_per_regime[regime_name] = ece_val
+
+            if ece_val < target_ece:
+                regimes_below.append(regime_name)
+            else:
+                regimes_above.append(regime_name)
+        except Exception as e:
+            logger.warning(f"ECE computation that bai cho regime {int(regime)}: {e}")
+
+    if not ece_per_regime:
+        return {
+            "ece_per_regime": {},
+            "max_ece": 0.0,
+            "mean_ece": 0.0,
+            "regimes_below_target": [],
+            "regimes_above_target": [],
+            "all_below_target": True,
+        }
+
+    ece_values = list(ece_per_regime.values())
+    max_ece = max(ece_values)
+    mean_ece = float(np.mean(ece_values))
+
+    return {
+        "ece_per_regime": ece_per_regime,
+        "max_ece": max_ece,
+        "mean_ece": mean_ece,
+        "regimes_below_target": regimes_below,
+        "regimes_above_target": regimes_above,
+        "all_below_target": len(regimes_above) == 0,
+    }
+
+
+# =============================================================================
 # Model B: XGBoost Binary Classifier
 # =============================================================================
 
@@ -139,10 +354,16 @@ class ModelBConfig:
         params: XGBoost training parameters (includes scale_pos_weight)
         theta_star: Decision threshold (default: 0.71)
         model_path: Path to save/load model
+        calibration_out_of_bounds: Isotonic Regression out_of_bounds handling
+        n_calibration_bins: Number of bins for ECE computation
+        ece_target: Target ECE per regime (default: 0.08)
     """
     params: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_MODEL_B_PARAMS))
     theta_star: float = THETA_STAR
     model_path: str | Path = "models/xgboost/model_b.json"
+    calibration_out_of_bounds: str = "clip"
+    n_calibration_bins: int = 10
+    ece_target: float = 0.08
 
 
 class XGBoostModelB:
@@ -169,6 +390,10 @@ class XGBoostModelB:
         self._optimal_threshold: float = self._config.theta_star
         self._class_balance: dict[str, float] = {}
 
+        # Batch 2: Isotonic Calibration & ECE
+        self._isotonic_model: "IsotonicRegression | None" = None
+        self._ece_per_regime: dict[str, Any] = {}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -188,6 +413,14 @@ class XGBoostModelB:
     @property
     def theta_star(self) -> float:
         return self._optimal_threshold
+
+    @property
+    def isotonic_model(self) -> "IsotonicRegression | None":
+        return self._isotonic_model
+
+    @property
+    def ece_per_regime(self) -> dict[str, Any]:
+        return self._ece_per_regime
 
     # ------------------------------------------------------------------
     # Training
@@ -345,6 +578,102 @@ class XGBoostModelB:
         return np.clip(confidence, 0.0, 1.0)
 
     # ------------------------------------------------------------------
+    # Calibration: Isotonic Regression
+    # ------------------------------------------------------------------
+
+    def fit_isotonic_calibration(
+        self,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+    ) -> "IsotonicRegression | None":
+        """Fit Isotonic Regression calibration using validation data.
+
+        Su dung sklearn.isotonic.IsotonicRegression de calibrate
+        P_hold probabilities. Luu isotonic model vao self.
+
+        Args:
+            X_val: Validation features (n_samples, n_features)
+            y_val: Validation labels (n_samples,) — 0=not_hold, 1=hold
+
+        Returns:
+            Fitted IsotonicRegression instance hoac None
+        """
+        if not self._is_trained or self._model is None:
+            logger.warning("Model B chua trained, khong the fit calibration.")
+            return None
+
+        # Predict raw probabilities
+        raw_probas = self._model.predict_proba(X_val)[:, 1]
+
+        isotonic = fit_isotonic_calibration(
+            y_true=y_val,
+            y_pred_proba=raw_probas,
+            out_of_bounds=self._config.calibration_out_of_bounds,
+        )
+
+        self._isotonic_model = isotonic
+        return isotonic
+
+    def predict_p_hold_calibrated(
+        self,
+        X: np.ndarray,
+    ) -> np.ndarray:
+        """Predict calibrated P_hold probabilities (sau Isotonic Regression).
+
+        Args:
+            X: Feature vector (n_samples, n_features)
+
+        Returns:
+            Calibrated P_hold array (n_samples,)
+        """
+        raw_p_hold = self.predict_p_hold(X)
+        return apply_isotonic_calibration(raw_p_hold, self._isotonic_model)
+
+    # ------------------------------------------------------------------
+    # ECE per Regime
+    # ------------------------------------------------------------------
+
+    def compute_ece_per_regime(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        regime_codes: np.ndarray,
+        calibrated: bool = True,
+    ) -> dict[str, Any]:
+        """Tinh ECE rieng cho tung regime type.
+
+        Target: ECE < 0.08 per regime (spec requirement).
+
+        Args:
+            X: Feature matrix (n_samples, n_features)
+            y: True labels (n_samples,) — 0=not_hold, 1=hold
+            regime_codes: Regime codes per sample (n_samples,)
+            calibrated: Neu True, dung calibrated probabilities
+
+        Returns:
+            Dict with ece_per_regime, max_ece, mean_ece, etc.
+        """
+        if not self._is_trained or self._model is None:
+            logger.warning("Model B chua trained, khong the tinh ECE.")
+            return {}
+
+        if calibrated and self._isotonic_model is not None:
+            p_hold = self.predict_p_hold_calibrated(X)
+        else:
+            p_hold = self.predict_p_hold(X)
+
+        result = compute_ece_per_regime(
+            y_true=y,
+            y_pred_proba=p_hold,
+            regime_codes=regime_codes,
+            n_bins=self._config.n_calibration_bins,
+            target_ece=self._config.ece_target,
+        )
+
+        self._ece_per_regime = result
+        return result
+
+    # ------------------------------------------------------------------
     # Save / Load
     # ------------------------------------------------------------------
 
@@ -401,17 +730,30 @@ class XGBoostModelB:
         self,
         X: np.ndarray,
         y: np.ndarray,
+        regime_codes: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Evaluate model B performance.
 
+        Args:
+            X: Feature matrix (n_samples, n_features)
+            y: True labels (n_samples,) — 0=not_hold, 1=hold
+            regime_codes: Regime codes per sample (optional, for ECE per regime)
+
         Returns:
-            Dict with accuracy, precision, recall, F1, AUC, etc.
+            Dict with accuracy, precision, recall, F1, AUC, etc.,
+            plus Brier Score, ECE, and ECE per regime (if regime_codes provided)
         """
         if not self._is_trained or self._model is None:
             raise RuntimeError("Model B is not trained yet.")
 
         y_pred_proba = self._model.predict_proba(X)[:, 1]
         y_pred = theta_star_threshold(y_pred_proba, self._optimal_threshold)
+
+        # Use calibrated probabilities if available
+        if self._isotonic_model is not None:
+            y_pred_proba_cal = apply_isotonic_calibration(y_pred_proba, self._isotonic_model)
+        else:
+            y_pred_proba_cal = y_pred_proba
 
         # Confusion matrix
         tp = np.sum((y_pred == 1) & (y == 1))
@@ -427,12 +769,22 @@ class XGBoostModelB:
         positive_rate = float(np.mean(y_pred))
         true_positive_rate = recall
 
+        # Brier Score (binary)
+        brier = float(np.mean((y_pred_proba_cal - y.astype(np.float64)) ** 2))
+
+        # ECE
+        ece = compute_ece_binary(y, y_pred_proba_cal, n_bins=self._config.n_calibration_bins)
+
         result: dict[str, Any] = {
             "accuracy": float(accuracy),
             "precision": float(precision),
             "recall": float(recall),
             "f1_score": float(f1),
             "theta_star": self._optimal_threshold,
+            "brier_score": brier,
+            "ece": ece,
+            "n_calibration_bins": self._config.n_calibration_bins,
+            "calibrated": self._isotonic_model is not None,
             "confusion_matrix": {
                 "tp": int(tp),
                 "tn": int(tn),
@@ -457,5 +809,17 @@ class XGBoostModelB:
                 )
             except Exception:
                 pass
+
+        # ECE per regime (if regime codes provided)
+        if regime_codes is not None:
+            ece_regime_result = compute_ece_per_regime(
+                y_true=y,
+                y_pred_proba=y_pred_proba_cal,
+                regime_codes=regime_codes,
+                n_bins=self._config.n_calibration_bins,
+                target_ece=self._config.ece_target,
+            )
+            result["ece_per_regime"] = ece_regime_result
+            self._ece_per_regime = ece_regime_result
 
         return result
