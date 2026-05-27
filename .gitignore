@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+.env
+.venv3/
+
+# Node
+node_modules/
+ui/node_modules/
+
+# Desktop app build
+desktop/target/
+desktop/src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+*.env.local
+*.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Temporary
+*.tmp
+*.swp

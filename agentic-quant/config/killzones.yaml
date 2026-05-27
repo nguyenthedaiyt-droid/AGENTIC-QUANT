@@ -1,0 +1,80 @@
+# =============================================================================
+# AGENTIC-QUANT — Trading Sessions (Killzones)
+# =============================================================================
+sessions:
+  - id: ASIAN
+    name: Asian Session
+    start_hour_utc: 22
+    start_minute_utc: 0
+    end_hour_utc: 7
+    end_minute_utc: 0
+    color: "#6B7280"   # Gray
+    session_weight:
+      ltf: 0.5   # Lower priority for LTF signals
+      htf: 1.0
+
+  - id: LONDON_OPEN_KZ
+    name: London Open Kill Zone
+    start_hour_utc: 7
+    start_minute_utc: 0
+    end_hour_utc: 8
+    end_minute_utc: 0
+    color: "#3B82F6"   # Blue
+    session_weight:
+      ltf: 1.5   # High priority for LTF during KZ
+      htf: 1.0
+
+  - id: LONDON
+    name: London Session
+    start_hour_utc: 7
+    start_minute_utc: 0
+    end_hour_utc: 11
+    end_minute_utc: 0
+    color: "#2563EB"   # Darker blue
+    session_weight:
+      ltf: 1.0
+      htf: 1.2
+
+  - id: NY_OPEN_KZ
+    name: NY Open Kill Zone
+    start_hour_utc: 12
+    start_minute_utc: 0
+    end_hour_utc: 13
+    end_minute_utc: 0
+    color: "#EF4444"   # Red
+    session_weight:
+      ltf: 1.5   # High priority for LTF during KZ
+      htf: 1.0
+
+  - id: NY_AM
+    name: NY Morning Session
+    start_hour_utc: 12
+    start_minute_utc: 0
+    end_hour_utc: 16
+    end_minute_utc: 0
+    color: "#DC2626"   # Darker red
+    session_weight:
+      ltf: 1.0
+      htf: 1.2
+
+  - id: NY_PM
+    name: NY Afternoon Session
+    start_hour_utc: 16
+    start_minute_utc: 0
+    end_hour_utc: 20
+    end_minute_utc: 0
+    color: "#B91C1C"   # Darkest red
+    session_weight:
+      ltf: 0.8
+      htf: 1.0
+
+# Overlapping Kill Zone
+kill_zone_overlap:
+  london_ny:
+    name: London-NY Kill Zone
+    start_hour_utc: 12
+    start_minute_utc: 0
+    end_hour_utc: 13
+    end_minute_utc: 0
+    color: "#F59E0B"   # Amber
+    description: "Highest probability liquidity sweeps"

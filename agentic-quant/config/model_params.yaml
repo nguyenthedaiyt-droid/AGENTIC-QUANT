@@ -1,0 +1,180 @@
+# =============================================================================
+# AGENTIC-QUANT — Model Parameters
+# =============================================================================
+
+# --- LSTM Autoencoder Architecture ---
+lstm:
+  # --- Tick-Level Encoder ---
+  tick_encoder:
+    hidden_dim: 128
+    num_layers: 2
+    bidirectional: true
+    input_dim: 8      # (bid, ask, last, volume, spread, tick_dir, iii, obi)
+    seq_length: 512   # So tick trong moi chuoi
+
+  # --- Bar-Level Encoder ---
+  bar_encoder:
+    hidden_dim: 256
+    num_layers: 3
+    bidirectional: false
+    input_dim: 12     # (open, high, low, close, volume, tick_count, cvd, iii, obi, atr14, atr5, disp_str)
+
+  # --- Multi-TF Encoders (6 TF: M1, M5, M15, H1, H4, D1) ---
+  mtf_encoders:
+    lookback_m1: 100   # 100 bars M1
+    lookback_m5: 48    # 48 bars M5
+    lookback_m15: 32   # 32 bars M15
+    lookback_h1: 24    # 24 bars H1
+    lookback_h4: 14    # 14 bars H4
+    lookback_d1: 20     # 20 bars D1
+
+  # --- Cross-TF Attention ---
+  cross_attention:
+    num_heads: 8
+    d_model: 512
+    dropout: 0.1
+
+  # --- Latent vector ---
+  latent_dim: 512
+
+  # --- Decoder (chi training) ---
+  decoder:
+    hidden_dim: 256
+    num_layers: 2
+
+  # --- Training ---
+  training:
+    batch_size: 256
+    epochs: 100
+    learning_rate: 0.001
+    weight_decay: 0.00001
+    beta_kl: 0.0001     # KL divergence weight (VAE variant)
+    patience: 10         # Early stopping
+    gradient_clip: 1.0
+    grad_accum_steps: 4
+
+  # --- Normalization ---
+  normalization:
+    method: robust    # robust | minmax | standard
+    fit_window: 5000 # So muu de fit scaler
+
+# --- XGBoost Model A ---
+model_a:
+  # --- Feature vector ---
+  feature_dim: 648
+  # z[512] + F_liq[24] + F_flow[20] + F_macro[12] + F_struct[64] + F_agg[16]
+
+  # --- Hyperparameters ---
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.7
+  colsample_bylevel: 0.8
+  min_child_weight: 5
+  reg_alpha: 0.1
+  reg_lambda: 1.5
+
+  # --- Training ---
+  objective: multi:softprob
+  num_class: 3  # BSL_HIT, SSL_HIT, LATERAL
+  eval_metric: [mlogloss, merror]
+  early_stopping_rounds: 50
+  tree_method: hist
+  device: cuda  # cuda | cpu
+
+  # --- Custom Loss ---
+  custom_loss:
+    overconfidence_penalty:
+      theta_oc: 0.85
+      lambda_oc: 0.5
+    news_regime_penalty:
+      lambda_nr: 0.3
+
+  # --- Calibration ---
+  calibration:
+    method: platt  # platt | isotonic
+    threshold_ece: 0.05
+
+  # --- Inference ---
+  inference:
+    timeout_ms: 5
+    batch_size: 100
+
+# --- XGBoost Model B ---
+model_b:
+  # --- Feature vector ---
+  feature_dim: 560
+  # z[512] + F_zone[16] + F_contact[20] + F_macro[12]
+
+  # --- Hyperparameters ---
+  n_estimators: 600
+  max_depth: 5
+  learning_rate: 0.03
+  subsample: 0.75
+  colsample_bytree: 0.65
+  colsample_bylevel: 0.75
+  min_child_weight: 8
+  reg_alpha: 0.2
+  reg_lambda: 2.0
+
+  # --- Training ---
+  objective: binary:logistic
+  eval_metric: [logloss, auc, aucpr]
+  early_stopping_rounds: 60
+  tree_method: hist
+  device: cuda
+
+  # --- Cost-Sensitive Learning ---
+  cost_sensitive:
+    fp_cost: 2.5    # False Positive
+    fn_cost: 1.0    # False Negative
+    optimal_threshold: 0.71
+
+  # --- Calibration ---
+  calibration:
+    method: isotonic  # Model B dung isotonic
+    threshold_ece_per_regime: 0.08
+
+  # --- Inference ---
+  inference:
+    timeout_ms: 5
+    batch_size: 50
+
+# --- Stacked Ensemble Meta-Learner ---
+ensemble:
+  meta_learner:
+    type: logistic_regression
+    C: 1.0
+    max_iter: 1000
+
+  inputs:
+    - p_bsl_xgb
+    - p_ssl_xgb
+    - p_lateral_xgb
+    - consensus_from_lstm
+    - regime_code
+
+# --- Vector DB Projection ---
+vector_projection:
+  input_dim: 608  # z[512] + f_smc[64] + f_macro[12] + f_flow[20]
+  output_dim: 256
+
+  metric_learning:
+    delta_pos: 0.85   # Similarity threshold for positive pairs
+    delta_neg: 0.50   # Similarity threshold for negative pairs
+    lambda_metric: 1.0
+
+  collection:
+    debate_archive:
+      dim: 256
+      m: 16
+      ef_construction: 200
+      ef: 128
+      distance: cosine
+
+    zone_embeddings:
+      dim: 64
+      m: 8
+      ef_construction: 100
+      distance: cosine

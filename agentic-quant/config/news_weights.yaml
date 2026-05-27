@@ -1,0 +1,75 @@
+# =============================================================================
+# AGENTIC-QUANT — News Impact Weights
+# =============================================================================
+news_impact:
+  # --- Alpha coefficient ---
+  # Chi so nhan toc dong cua tin len thi truong
+  alpha: 0.4
+
+  # --- Base impact scores ---
+  impact_base_score:
+    Low: 0.2
+    Medium: 0.5
+    High: 1.0
+
+  # --- Guardrail dampening ---
+  guardrail_dampening:
+    # Giam dan do tin cay cua LTF trong PRE_NEWS/NEWS_WINDOW
+    pre_news_dampening_factor: 0.3   # Trong 15 phut truoc tin, LTF weight *= 0.3
+    news_window_dampening_factor: 0.1
+    post_news_dampening: 1.0          # Khoi phuc day du sau tin
+
+  # --- Guardrail timing ---
+  pre_news_window_seconds: 900   # 15 phut = 900 giay
+  news_window_seconds: 300       # 5 phut = 300 giay
+  post_news_lookback_seconds: 600 # 10 phut de xac dinh post regime
+
+  # --- Surprise Factor ---
+  surprise_factor:
+    major_threshold_z: 2.0    # Z-score de xac dinh major surprise
+    sigma_update_window: 30    # So mau de update sigma online (Welford's)
+
+  # --- Post-News Regime Thresholds ---
+  post_regime:
+    impulsive_threshold: 0.8   # directional_move / ATR_H1 >= 0.8 -> IMPULSIVE
+    reversal_threshold: -0.5  # directional_move / ATR_H1 <= -0.5 -> REVERSAL
+    # Nguoc lai -> CHOPPY
+
+  # --- News event categories ---
+  event_categories:
+    CPI:
+      currencies: [USD, EUR, GBP, CAD, AUD, NZD]
+      impact_default: High
+    FOMC:
+      currencies: [USD]
+      impact_default: High
+      volatility_multiplier: 2.0
+    NFP:
+      currencies: [USD]
+      impact_default: High
+      volatility_multiplier: 2.5
+    GDP:
+      currencies: [ALL]
+      impact_default: Medium
+    PMI:
+      currencies: [ALL]
+      impact_default: Medium
+    RETAIL_SALES:
+      currencies: [USD, GBP, CAD, AUD, EUR]
+      impact_default: Medium
+    UNEMPLOYMENT:
+      currencies: [ALL]
+      impact_default: Medium
+    INTEREST_RATE:
+      currencies: [ALL]
+      impact_default: High
+      volatility_multiplier: 3.0
+
+# --- Macro Regime Guardrail ---
+macro_guardrail:
+  # Diều chỉnh P_BSL/P_SSL trong PRE_NEWS/NEWS_WINDOW
+  gamma_0: 0.3   # Hệ số giảm tối đa trong guardrail
+
+  # Công thức: gamma = gamma_0 * (1 - max(0, t_to_news) / 900)
+  # Khi t_to_news = 0: gamma = gamma_0 (giảm mạnh nhất)
+  # Khi t_to_news = 900: gamma = 0 (không giảm)

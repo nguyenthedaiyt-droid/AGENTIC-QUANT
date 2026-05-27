@@ -1,0 +1,72 @@
+# =============================================================================
+# AGENTIC-QUANT — Docker Compose
+# Khoi dong Redis va Qdrant cho development
+# Su dung: docker compose up -d
+# =============================================================================
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: agentic-quant-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --hz 20
+      --tcp-keepalive 60
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  qdrant:
+    image: qdrant/qdrant
+    container_name: agentic-quant-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Optional: Redis Commander for debugging
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: agentic-quant-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - debug
+
+  # Optional: Qdrant Dashboard
+  # qdrant-dashboard:
+  #   image: qdrant/qdrant-landing
+  #   ports:
+  #     - "6335:80"
+  #   depends_on:
+  #     - qdrant
+  #   profiles:
+  #     - debug
+
+volumes:
+  redis_data:
+  qdrant_data:

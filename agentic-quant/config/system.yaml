@@ -1,0 +1,44 @@
+# =============================================================================
+# AGENTIC-QUANT — Ngưỡng vận hành hệ thống (System Thresholds)
+# =============================================================================
+system_thresholds:
+  # --- Information Coefficient (IC) ---
+  ic:
+    good: 0.10
+    warning: 0.05
+    critical: 0.05  # MODEL_DEGRADED trigger
+
+  # --- Brier Score ---
+  brier_score:
+    good: 0.20
+    warning: 0.28
+    critical: 0.28  # MODEL_DEGRADED trigger
+
+  # --- ECE ---
+  ece:
+    good: 0.05
+    warning: 0.08
+    critical: 0.08  # MODEL_DEGRADED trigger
+
+  # --- F1 Hold @ 0.70 threshold ---
+  f1_hold:
+    good: 0.65
+    warning: 0.50
+    critical: 0.50  # MODEL_DEGRADED trigger
+
+  # --- Feature Drift Score (PSI) ---
+  feature_drift_score:
+    warning: 0.20
+    critical: 0.40  # MODEL_DEGRADED trigger
+
+  # --- IPC Latency ---
+  ipc_latency_ms:
+    good: 25
+    warning: 50
+    critical: 50  # MODEL_DEGRADED trigger
+
+  # --- Redis Memory ---
+  redis_memory_pct:
+    good: 60
+    warning: 80
+    critical: 80  # MODEL_DEGRADED trigger
