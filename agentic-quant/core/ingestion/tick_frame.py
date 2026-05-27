@@ -54,7 +54,7 @@ class TickFrame:
     @property
     def spread_pips(self) -> float:
         """Spread tính bằng pips (4 chữ số thập phân)."""
-        return (self.ask - self.bid) * _PRICE_SCALE / 10000
+        return (self.ask - self.bid) * 10000.0
 
     @property
     def mid_price(self) -> float:

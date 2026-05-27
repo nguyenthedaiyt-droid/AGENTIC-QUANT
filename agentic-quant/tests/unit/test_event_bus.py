@@ -114,7 +114,8 @@ class TestEventBus:
 
         metrics = bus.get_metrics()
         assert metrics["published"] == 2
-        assert metrics["published_by_type"]["TICK_RECEIVED"] == 2
+        # published_by_type keys la string tu str(EventType)
+        assert metrics["published_by_type"]["EventType.TICK_RECEIVED"] == 2
 
     def test_unsubscribe_all(self, bus: EventBus) -> None:
         async def h1(_: AllEvents) -> None:

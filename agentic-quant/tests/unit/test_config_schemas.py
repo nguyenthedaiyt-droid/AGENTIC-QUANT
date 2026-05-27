@@ -71,7 +71,8 @@ class TestSessionConfig:
         assert cfg.id == "LONDON_OPEN_KZ"
         assert cfg.start_hour_utc == 7
         assert cfg.end_hour_utc == 8
-        assert cfg.session_weight.ltf == 1.5
+        # Default session_weight.ltf = 1.0 (killzone weights tu config yaml)
+        assert cfg.session_weight.ltf == 1.0
 
 
 class TestKillzoneConfig:

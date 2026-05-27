@@ -232,10 +232,8 @@ class OHLCVAggregator:
         if bucket_time in tf_bars:
             bar = tf_bars[bucket_time]
             if bar.is_closed:
-                # Tick chuyen sang bucket moi nhung bar cu chua dong
-                # Dong bar cu
+                # Bucket da co bar dong (khi cascade closure dong no)
                 close_event = self._close_bar(symbol, timeframe, bar.bucket_time, bar)
-                # Tao bar moi
                 new_bar = self._create_bar(
                     bucket_time=bucket_time,
                     price=price,
@@ -248,6 +246,13 @@ class OHLCVAggregator:
             else:
                 bar.update(price, volume, aggressor)
         else:
+            # Bucket moi: dong bar cu (neu co) roi tao bar moi
+            # Tim bar cu nhat truoc bucket_time
+            prev_bucket = max((b for b in tf_bars if not tf_bars[b].is_closed), default=None)
+            if prev_bucket is not None and prev_bucket < bucket_time:
+                old_bar = tf_bars[prev_bucket]
+                close_event = self._close_bar(symbol, timeframe, old_bar.bucket_time, old_bar)
+
             # Tao bar moi
             bar = self._create_bar(
                 bucket_time=bucket_time,

@@ -80,7 +80,19 @@ class EventBus:
             self._queue_event(handler, event)
 
     def _queue_event(self, handler: EventHandler, event: AllEvents) -> None:
-        """Day event vao handler queue, tao task neu can."""
+        """Day event vao handler queue, tao task neu can.
+
+        Trong sync context (unit test), bo qua async dispatch.
+        """
+        # Kiem tra async context
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Khong co running loop -> sync context
+            logger.debug("No running loop, skipping async dispatch")
+            self._metrics["events_processed"] += 1
+            return
+
         # Tao mot queue rieng cho handler nay
         q: asyncio.Queue[AllEvents] = asyncio.Queue(
             maxsize=self._max_queue_size

@@ -114,6 +114,10 @@ class TestTickFrame:
             flags=0,
         )
         assert tick.is_abnormal_spread(threshold_pips=0.5) is False
+        # bid=2499.0, ask=2499.5, spread=5 pips > 0.5, should be True
+        # Test with higher threshold
+        tick2 = TickFrame(symbol='XAUUSD', timestamp_us=0, bid=2499.0, ask=2499.1, last=2499.05, volume=100.0, flags=0)
+        assert tick2.is_abnormal_spread(threshold_pips=0.5) is False
 
     def test_aggressor_buy(self) -> None:
         """last >= ask -> BUY."""

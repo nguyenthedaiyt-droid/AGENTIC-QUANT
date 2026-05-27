@@ -123,7 +123,7 @@ class LSTMEncoderConfig(BaseModel):
 
 class LSTMConfig(BaseModel):
     tick_encoder: LSTMEncoderConfig = Field(default_factory=lambda: LSTMEncoderConfig(hidden_dim=128, num_layers=2, input_dim=8, seq_length=512))
-    bar_encoder: LSTMEncoderConfig = Field(default_factory=lambda: LSTMEncoderConfig(hidden_dim=256, num_layers=3, input_dim=12))
+    bar_encoder: LSTMEncoderConfig = Field(default_factory=lambda: LSTMEncoderConfig(hidden_dim=256, num_layers=3, input_dim=12, seq_length=128))
     cross_attention_heads: int = Field(default=8, ge=1)
     d_model: int = Field(default=512, ge=64)
     latent_dim: int = Field(default=512, ge=64)
