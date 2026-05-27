@@ -1,0 +1,309 @@
+# ==============================================================================
+# .github/workflows/build.yml
+# GitHub Actions CI/CD — Build & Release AGENTIC-QUANT Desktop App
+# Trigger: git tag push v* (e.g. v0.1.0, v1.2.3-beta)
+# Matrix: windows-latest, macos-latest
+# Builds: Python backend (PyInstaller) + Rust/Tauri frontend
+# Assets: .msi (Windows), .dmg (macOS)
+# ==============================================================================
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"  # v0.1.0, v1.2.3, v2.0.0-beta, etc.
+
+jobs:
+  # ---------------------------------------------------------------
+  # Build Job — matrix: Windows + macOS
+  # ---------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+      fail-fast: false  # Không cancel các OS khác nếu 1 OS fail
+
+    steps:
+      # -----------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Lấy full history cho version info
+
+      # -----------------------------------------------------------
+      # 2. Setup Python 3.11
+      # -----------------------------------------------------------
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"  # Cache pip downloads
+
+      # -----------------------------------------------------------
+      # 3. Setup Node.js (cho UI build)
+      # -----------------------------------------------------------
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      # -----------------------------------------------------------
+      # 4. Setup Rust toolchain (cho Tauri build)
+      # -----------------------------------------------------------
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || '' }}
+            ${{ matrix.os == 'macos-latest' && 'x86_64-apple-darwin' || '' }}
+
+      # -----------------------------------------------------------
+      # 5. Cache Rust dependencies
+      # -----------------------------------------------------------
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri -> target
+          cache-on-failure: true
+
+      # -----------------------------------------------------------
+      # 6. Install system dependencies (Linux/macOS specific)
+      # -----------------------------------------------------------
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          # Tauri trên macOS cần một số system libs
+          # WebKit2GTK không cần trên macOS — dùng WebKit system
+          echo "macOS dependencies satisfied"
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: |
+          # WebView2 runtime đã có sẵn trên Windows 10/11
+          # C++ Build Tools — đã có sẵn trên windows-latest runner
+          echo "Windows dependencies satisfied"
+          choco install -y --no-progress wixtoolset 2>$null || true
+
+      # -----------------------------------------------------------
+      # 7. Install Python dependencies
+      # -----------------------------------------------------------
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry install --no-dev --no-interaction
+
+      # -----------------------------------------------------------
+      # 8. Install UI dependencies
+      # -----------------------------------------------------------
+      - name: Install UI dependencies
+        shell: bash
+        working-directory: ui
+        run: |
+          npm ci --no-audit --no-fund
+
+      # -----------------------------------------------------------
+      # 9. Build UI (frontend dist)
+      # -----------------------------------------------------------
+      - name: Build UI
+        shell: bash
+        working-directory: ui
+        run: |
+          npm run build
+
+      # -----------------------------------------------------------
+      # 10. Build PyInstaller backend (standalone executable)
+      # -----------------------------------------------------------
+      - name: Build PyInstaller backend
+        shell: bash
+        run: |
+          pip install pyinstaller
+          pyinstaller \
+            --name "agentic-quant-backend" \
+            --onefile \
+            --add-data "core:core" \
+            --hidden-import core \
+            --hidden-import core.main \
+            --hidden-import core.ml \
+            --hidden-import core.ingestion \
+            --hidden-import core.memory \
+            --hidden-import core.macro \
+            --hidden-import core.ipc \
+            --hidden-import core.utils \
+            --hidden-import pydantic \
+            --hidden-import loguru \
+            --hidden-import numpy \
+            --hidden-import pandas \
+            --hidden-import yaml \
+            --hidden-import redis \
+            --hidden-import qdrant_client \
+            --hidden-import xgboost \
+            --hidden-import sklearn \
+            --hidden-import prometheus_client \
+            --hidden-import orjson \
+            --hidden-import tenacity \
+            core/main.py
+
+      - name: List PyInstaller output
+        shell: bash
+        run: |
+          ls -la dist/
+
+      # -----------------------------------------------------------
+      # 11. Build Tauri desktop app
+      # -----------------------------------------------------------
+      - name: Install Tauri CLI
+        shell: bash
+        working-directory: desktop
+        run: |
+          npm install
+
+      - name: Build Tauri app
+        shell: bash
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""  # Optional: sign build
+          TAURI_SIGNING_PASSPHRASE: ""
+        run: |
+          cargo tauri build --ci
+
+      # -----------------------------------------------------------
+      # 12. List build artifacts
+      # -----------------------------------------------------------
+      - name: List build artifacts
+        shell: bash
+        run: |
+          echo "=== PyInstaller artifacts ==="
+          ls -la dist/
+          echo ""
+          echo "=== Tauri bundle artifacts ==="
+          find desktop/src-tauri/target/release/bundle -type f 2>/dev/null || echo "No bundle dir"
+
+      # -----------------------------------------------------------
+      # 13. Upload artifacts (cho release job)
+      # -----------------------------------------------------------
+      - name: Upload Tauri bundles as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/
+            dist/agentic-quant-backend*
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Release Job — Tạo GitHub Release và upload assets
+  # ---------------------------------------------------------------
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Cần quyền upload release assets
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-windows-latest
+          path: artifacts/windows
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-macos-latest
+          path: artifacts/macos
+
+      - name: List all artifacts
+        run: |
+          find artifacts -type f -ls
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "AGENTIC-QUANT v${{ steps.version.outputs.version }}"
+          body_path: CHANGELOG.md 2>/dev/null || echo "See release notes"
+          draft: true
+          prerelease: ${{ contains(steps.version.outputs.tag, 'beta') || contains(steps.version.outputs.tag, 'alpha') }}
+          files: |
+            artifacts/windows/**/*.msi
+            artifacts/windows/**/*.exe
+            artifacts/macos/**/*.dmg
+            artifacts/windows/dist/agentic-quant-backend*
+            artifacts/macos/dist/agentic-quant-backend*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows MSI
+        uses: actions/upload-release-asset@v1
+        if: runner.os == 'Linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/artifacts/windows/agentic-quant-desktop_${{ steps.version.outputs.version }}_x64.msi
+          asset_name: AGENTIC-QUANT-${{ steps.version.outputs.version }}-x64.msi
+          asset_content_type: application/x-msi
+
+      - name: Upload macOS DMG
+        uses: actions/upload-release-asset@v1
+        if: runner.os == 'Linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/artifacts/macos/AGENTIC-QUANT_${{ steps.version.outputs.version }}_x64.dmg
+          asset_name: AGENTIC-QUANT-${{ steps.version.outputs.version }}-x64.dmg
+          asset_content_type: application/x-apple-diskimage
+
+  # ---------------------------------------------------------------
+  # Test Job (optional — chạy tests truoc khi build)
+  # ---------------------------------------------------------------
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    if: false  # Disabled by default — enable khi ready
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install --with dev --no-interaction
+
+      - name: Run tests
+        run: |
+          poetry run pytest tests/ -v --timeout=120 --junitxml=test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml

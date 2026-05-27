@@ -84,8 +84,8 @@ class FVGStateMachine:
     ) -> MitigationType:
         """Kiem tra chuyen doi state dua tren current bar.
 
-        Thu tu kiem tra: WICK_TOUCHED -> WICK_FILLED -> BODY_FILLED ->
-                         WICK_FILLED_HALF -> BODY_FILLED_HALF
+        Kiem tra tu nhe den nang: WICK_TOUCHED -> ... -> BODY_FILLED_HALF.
+        Chi tra ve state tiep theo trong progression, khong nhay state.
 
         Args:
             imb: Imbalance hien tai
@@ -104,42 +104,66 @@ class FVGStateMachine:
         body_min = min(current_bar_open, current_bar_close)
         body_max = max(current_bar_open, current_bar_close)
 
-        if imb.is_bullish:
-            # Bullish FVG: gia di LEN de fill gap
-            # WICK_TOUCHED: low < bottom
-            if current_bar_low < bottom:
-                return MitigationType.WICK_TOUCHED
-            # WICK_FILLED: low <= bottom
-            if current_bar_low <= bottom:
-                return MitigationType.WICK_FILLED
-            # BODY_FILLED: min(O,C) <= bottom
-            if body_min <= bottom:
-                return MitigationType.BODY_FILLED
-            # WICK_FILLED_HALF: low <= middle
-            if current_bar_low <= mid:
-                return MitigationType.WICK_FILLED_HALF
-            # BODY_FILLED_HALF: min(O,C) <= middle
-            if body_min <= mid:
-                return MitigationType.BODY_FILLED_HALF
-        else:
-            # Bearish FVG: gia di XUONG de fill gap
-            # WICK_TOUCHED: high > top
-            if current_bar_high > top:
-                return MitigationType.WICK_TOUCHED
-            # WICK_FILLED: high >= top
-            if current_bar_high >= top:
-                return MitigationType.WICK_FILLED
-            # BODY_FILLED: max(O,C) >= top
-            if body_max >= top:
-                return MitigationType.BODY_FILLED
-            # WICK_FILLED_HALF: high >= middle
-            if current_bar_high >= mid:
-                return MitigationType.WICK_FILLED_HALF
-            # BODY_FILLED_HALF: max(O,C) >= middle
-            if body_max >= mid:
-                return MitigationType.BODY_FILLED_HALF
+        # Current state index — find where we are in progression
+        try:
+            current_idx = self._STATE_ORDER.index(settings_type)
+        except ValueError:
+            current_idx = self._STATE_ORDER.index(MitigationType.WICK_FILLED)
 
-        return MitigationType.NONE
+        if imb.is_bullish:
+            # Bullish FVG: gia di LEN de fill gap (low pha vỡ bottom từ trên xuống)
+            for next_idx in range(current_idx + 1, len(self._STATE_ORDER)):
+                next_type = self._STATE_ORDER[next_idx]
+                hit = self._check_bullish_hit(next_type, current_bar_low, body_min, bottom, mid)
+                if hit:
+                    return next_type
+        else:
+            # Bearish FVG: gia di XUONG de fill gap (high pha vỡ top từ dưới lên)
+            for next_idx in range(current_idx + 1, len(self._STATE_ORDER)):
+                next_type = self._STATE_ORDER[next_idx]
+                hit = self._check_bearish_hit(next_type, current_bar_high, body_max, top, mid)
+                if hit:
+                    return next_type
+
+        return settings_type  # No progression
+
+    @staticmethod
+    def _check_bullish_hit(
+        mit_type: MitigationType, low: float, body_min: float,
+        bottom: float, mid: float
+    ) -> bool:
+        """Check bullish FVG mitigation hit."""
+        match mit_type:
+            case MitigationType.WICK_TOUCHED:
+                return low < bottom
+            case MitigationType.WICK_FILLED:
+                return low <= bottom
+            case MitigationType.BODY_FILLED:
+                return body_min <= bottom
+            case MitigationType.WICK_FILLED_HALF:
+                return low <= mid
+            case MitigationType.BODY_FILLED_HALF:
+                return body_min <= mid
+        return False
+
+    @staticmethod
+    def _check_bearish_hit(
+        mit_type: MitigationType, high: float, body_max: float,
+        top: float, mid: float
+    ) -> bool:
+        """Check bearish FVG mitigation hit."""
+        match mit_type:
+            case MitigationType.WICK_TOUCHED:
+                return high > top
+            case MitigationType.WICK_FILLED:
+                return high >= top
+            case MitigationType.BODY_FILLED:
+                return body_max >= top
+            case MitigationType.WICK_FILLED_HALF:
+                return high >= mid
+            case MitigationType.BODY_FILLED_HALF:
+                return body_max >= mid
+        return False
 
 
 class FVGOBScanner:

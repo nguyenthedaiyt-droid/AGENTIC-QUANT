@@ -1,18 +1,6 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type {
-  OHLCV,
-  Zone,
-  ModelAPrediction,
-  ZonePrediction,
-  LiquidityTarget,
-  DebateRecord,
-  CountdownState,
-  SystemMetrics,
-  Session,
-  RegimeType,
-  MacroRegime,
-  SystemStatus,
-} from '@types/index'
+import type { OHLCV, Zone, Session, RegimeType } from '../types/index'
+import type { LiquidityTarget } from '../types/index'
 
 // --- chartSlice ---
 

@@ -1,5 +1,5 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { ModelAPrediction, ZonePrediction, DebateRecord, ConfidenceQualifier } from '@types/index'
+import type { ModelAPrediction, ZonePrediction, DebateRecord, ConfidenceQualifier } from '../types/index'
 
 // --- aiStateSlice ---
 

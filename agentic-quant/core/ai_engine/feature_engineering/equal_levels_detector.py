@@ -114,11 +114,7 @@ class EqualLevelsDetector:
     def _create_eq(self, p1: Pivot, p2: Pivot) -> EqualLevel | None:
         """Tao EqualLevel moi (tu Pine Script: method AddEQ).
 
-        Pine Script:
-          eq.start = p1.price; eq.end = p2.price
-          eq.start_index = p1.index; eq.end_index = p2.index
-          eq.isHigh = p1.isHigh; eq.isLow = p1.isLow
-          eq.price = max(start, end) if isHigh else min(start, end)
+        Note: testEQ duoc thuc hien boi caller khi co OHLC data.
         """
         if abs(p1.price - p2.price) >= self._spacing:
             return None
@@ -140,45 +136,43 @@ class EqualLevelsDetector:
         else:
             eq.price = min(p1.price, p2.price)
 
-        if self._test_eq(p1, p2):
-            self._equal_levels.insert(0, eq)
-            return eq
+        self._equal_levels.insert(0, eq)
+        return eq
 
-        return None
-
-    def _test_eq(self, p1: Pivot, p2: Pivot) -> bool:
-        """Kiem tra EQ valid (tu Pine Script: testEQ function).
+    def test_eq_with_bars(
+        self,
+        eq: EqualLevel,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        close_idx: int,
+    ) -> bool:
+        """Test EQ voi OHLC data (chinh xac nhu Pine Script testEQ).
 
         Pine Script testEQ:
           for i = p1.index + 1 to p2.index - 1:
-            p = tester.get_price(i)
+            p = tester.get_price(i)  # gia tren duong noi 2 pivot
             if isHigh and high[j] > p or not isHigh and low[j] < p:
               valid = False
         """
-        from_idx = min(p1.index, p2.index) + 1
-        to_idx = max(p1.index, p2.index)
+        from_idx = eq.start_index + 1
+        to_idx = eq.end_index
 
-        # Dung price tuyen tinh noi 2 pivot de kiem tra
-        # price_at_bar(i) = p1.price + (p2.price - p1.price) * (i - from_idx) / (to_idx - from_idx)
-        if to_idx == from_idx:
+        if to_idx <= from_idx or to_idx >= len(highs):
             return True
 
-        is_high = p1.is_high
+        slope = (eq.end - eq.start) / (to_idx - eq.start_index)
+        is_high = eq.is_high
 
-        # Check all bars between the two pivots
-        # If any bar exceeds the EQ line -> invalid
-        # For Equal High: high should not exceed the line
-        # For Equal Low: low should not go below the line
-        slope = (p2.price - p1.price) / (to_idx - from_idx)
-
-        for i in range(from_idx, to_idx):
-            price_at_bar = p1.price + slope * (i - p1.index)
+        for i in range(from_idx, min(to_idx, len(highs))):
+            price_at_bar = eq.start + slope * (i - eq.start_index)
             if is_high:
-                pass  # Will check with external data
+                if highs[i] > price_at_bar:
+                    return False
             else:
-                pass  # Will check with external data
+                if lows[i] < price_at_bar:
+                    return False
 
-        return True  # Valid if no bar exceeds
+        return True
 
     def test_eq_with_bars(
         self,

@@ -273,6 +273,7 @@ async def export_mt5_ticks(
 
     # Build MQL5 script command
     # MT5 cung cap API de doc history, day script:
+    escaped_path = output_path.as_posix().replace("/", "\\\\")
     script = f"""
     //+------------------------------------------------------------------+
     //| ExportTicks.mq5                                                   |
@@ -282,7 +283,7 @@ async def export_mt5_ticks(
     input string InSymbol = "{symbol}";
     input datetime InStart = {int(start_date.timestamp())};
     input datetime InEnd = {int(end_date.timestamp())};
-    input string OutFile = "{output_path.as_posix().replace('/', '\\\\')}";
+    input string OutFile = "{escaped_path}";
     //+------------------------------------------------------------------+
     void OnStart() {{
         // Doc history ticks
@@ -300,9 +301,8 @@ async def export_mt5_ticks(
     Path(script_path).write_text(script)
 
     logger.info(
-        "MT5 export script tao tai {script}. "
+        f"MT5 export script tao tai {script_path}. "
         "Chay thu cong MT5 de export data.",
-        script=script_path,
     )
 
     return output_path

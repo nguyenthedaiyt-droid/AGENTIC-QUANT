@@ -85,9 +85,7 @@ class SwingPointDetector:
         """
         i = idx
         n = len(pivots)
-        while (i < n and i - 1 >= 0 and
-               pivots[i].price == pivots[i - 1].price and
-               n <= i - 1):
+        while i < n and i - 1 >= 0 and pivots[i].price == pivots[i - 1].price:
             i += 1
         return min(i, n - 1)
 

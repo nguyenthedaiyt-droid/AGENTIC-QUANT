@@ -289,7 +289,8 @@ class FeatureEngineeringPipeline:
         current_price = float(closes[0]) if len(closes) > 0 else 0.0
         result.current_price = current_price
 
-        # Chi detect pivots (IT/LT)
+        # Still detect IT/LT pivots (skip LTF FVG/OB)
+        pivots = self._sp_detector.detect(highs, lows, times, result.bar_close_time)
         all_pivots = self._sp_detector.get_all_pivots()
         result.pivots = all_pivots
 
@@ -321,19 +322,22 @@ class FeatureEngineeringPipeline:
         current_price: float,
     ) -> list[dict]:
         """Build zone list cho persistence vao Redis."""
+        # Build zone list with proper distance calculations
         zones = []
-
         for fvg in fvg_coll.fvgs:
             if fvg.mitigated:
                 continue
             zone_type = "FVG_BULL" if fvg.is_bullish else "FVG_BEAR"
             zone_id = fvg.id or f"fvg_{zone_type.lower()}_{fvg.open_time}"
+            dist_to_price = abs(fvg.middle - current_price) / (current_price + 1e-9)
             zones.append({
                 "zone_id": zone_id,
                 "zone_type": zone_type,
                 "top": fvg.top,
                 "bottom": fvg.bottom,
+                "mid": fvg.middle,
                 "ce": fvg.middle,
+                "distance": dist_to_price,
                 "p_hold": 0.5,
                 "w_zone": 1.5 if fvg.zone == "premium" else 1.0,
                 "iii_formation": fvg.strength,
@@ -348,12 +352,15 @@ class FeatureEngineeringPipeline:
                 continue
             zone_type = "VI_BULL" if fvg.is_bullish else "VI_BEAR"
             zone_id = fvg.id or f"ifvg_{zone_type.lower()}_{fvg.open_time}"
+            dist_to_price = abs(fvg.middle - current_price) / (current_price + 1e-9)
             zones.append({
                 "zone_id": zone_id,
                 "zone_type": zone_type,
                 "top": fvg.top,
                 "bottom": fvg.bottom,
+                "mid": fvg.middle,
                 "ce": fvg.middle,
+                "distance": dist_to_price,
                 "p_hold": 0.3,
                 "w_zone": 1.0,
                 "iii_formation": 0.0,
