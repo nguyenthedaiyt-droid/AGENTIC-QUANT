@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
-from datetime import datetime, timezone
 
 import pytest
 
@@ -16,6 +14,7 @@ from core.ingestion import (
     VolumetricsEngine,
     MTFSynchronizer,
     TickFrame,
+    BarState,
     TIMEFRAME_SECONDS,
 )
 from core.ingestion.itq_queue import IncomingTickQueue
@@ -293,7 +292,7 @@ class TestModule1Integration:
         desync = components["desync"]
 
         bars = {
-            0: ohlcv_1 := BarState(
+            0: BarState(
                 open=2500.0, high=2510.0, low=2490.0, close=2505.0,
                 volume=100.0, tick_count=50, bucket_time=0, is_closed=True,
             ),

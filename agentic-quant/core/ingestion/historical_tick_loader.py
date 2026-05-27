@@ -5,14 +5,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
-
-import aiofiles
 from loguru import logger
 
 from core.ingestion.tick_frame import TickFrame
@@ -267,7 +263,6 @@ async def export_mt5_ticks(
     Returns:
         Duong dan file Parquet da tao
     """
-    import json
     import subprocess
 
     output_dir = Path(output_dir)
@@ -302,8 +297,7 @@ async def export_mt5_ticks(
 
     # Serialize script
     script_path = output_path.parent / "ExportTicks.mq5"
-    async with aiofiles.open(script_path, "w") as f:
-        await f.write(script)
+    Path(script_path).write_text(script)
 
     logger.info(
         "MT5 export script tao tai {script}. "
