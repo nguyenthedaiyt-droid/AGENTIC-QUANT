@@ -20,11 +20,11 @@
 
 ### 0.1 Khởi tạo Repository và Cấu trúc Dự án 🔴
 
-- [ ] **0.1.1** Tạo Git repository với branch strategy:
+- [x] **0.1.1** Tạo Git repository với branch strategy:
   - `main` (production-only, protected)
   - `develop` (integration branch)
   - `feature/*`, `fix/*`, `chore/*` (working branches)
-- [ ] **0.1.2** Tạo cấu trúc thư mục đầy đủ theo spec V1.0:
+- [x] **0.1.2** Tạo cấu trúc thư mục đầy đủ theo spec V1.0:
   ```
   agentic-quant/
   ├── core/ (ingestion, macro, ai_engine, memory, backtesting, ipc)
@@ -37,19 +37,19 @@
   ├── tests/ (unit, integration, backtest_scenarios)
   └── scripts/
   ```
-- [ ] **0.1.3** Tạo `.gitignore` chuẩn cho Python + Node + Rust
+- [x] **0.1.3** Tạo `.gitignore` chuẩn cho Python + Node + Rust
 - [ ] **0.1.4** Tạo `.editorconfig` thống nhất coding style
-- [ ] **0.1.5** Viết `README.md` với hướng dẫn setup cơ bản
+- [x] **0.1.5** Viết `README.md` với hướng dẫn setup cơ bản
 
 ### 0.2 Môi Trường Python Backend 🔴
 
-- [ ] **0.2.1** Tạo `pyproject.toml` với Poetry (dependency management):
+- [x] **0.2.1** Tạo `pyproject.toml` với Poetry (dependency management):
   - Runtime deps: `numpy`, `pandas`, `pyzmq`, `websockets`, `aiohttp`
   - ML deps: `xgboost`, `torch` (cho LSTM), `scikit-learn`
   - DB deps: `redis`, `sqlite3` (stdlib), `chromadb` hoặc `qdrant-client`
   - Util deps: `pyyaml`, `msgpack`, `loguru`, `prometheus-client`
 - [ ] **0.2.2** Tạo `requirements.txt` lock file từ pyproject
-- [ ] **0.2.3** Cấu hình `pytest` với `pytest.ini`:
+- [x] **0.2.3** Cấu hình `pytest` với `pytest.ini`:
   - Test discovery pattern
   - Coverage threshold: 70% minimum
 - [ ] **0.2.4** Cài đặt pre-commit hooks:
@@ -57,7 +57,7 @@
   - `ruff` (linter, thay thế flake8)
   - `mypy` (type checking, strict mode)
   - `pytest` (chạy unit tests trước mỗi commit)
-- [ ] **0.2.5** Tạo `Makefile` với các target phổ biến:
+- [x] **0.2.5** Tạo `Makefile` với các target phổ biến:
   - `make install`, `make test`, `make lint`, `make run`
 
 ### 0.3 Môi Trường Frontend (React + TypeScript) 🟡
@@ -87,30 +87,30 @@
 
 ### 0.5 Config Files và Schemas 🟢
 
-- [ ] **0.5.1** Viết `config/system.yaml` với tất cả tham số hệ thống:
+- [x] **0.5.1** Viết `config/system.yaml` với tất cả tham số hệ thống:
   - ZeroMQ ports, WebSocket port (47290), Redis connection
   - Tick thresholds, ATR periods, lookback windows
-- [ ] **0.5.2** Viết `config/model_params.yaml`:
+- [x] **0.5.2** Viết `config/model_params.yaml`:
   - XGBoost hyperparameters (Model A & B)
   - LSTM architecture params
   - Ensemble weights
-- [ ] **0.5.3** Viết `config/killzones.yaml` đầy đủ 6 phiên
-- [ ] **0.5.4** Viết `config/news_weights.yaml`:
+- [x] **0.5.3** Viết `config/killzones.yaml` đầy đủ 6 phiên
+- [x] **0.5.4** Viết `config/news_weights.yaml`:
   - Alpha coefficient (α = 0.4), guardrail_dampening_factor
-- [ ] **0.5.5** Tạo Pydantic models cho config validation:
+- [x] **0.5.5** Tạo Pydantic models cho config validation:
   `core/config/schemas.py` — validate config khi load
 
 ### 0.6 Logging & Observability Infrastructure 🟢
 
-- [ ] **0.6.1** Thiết lập `loguru` với structured JSON logging:
+- [x] **0.6.1** Thiết lập `loguru` với structured JSON logging:
   - Log levels: DEBUG (dev), INFO (staging), WARNING (prod)
   - Log rotation: 100MB per file, giữ 7 ngày
   - Separate log files: `system.log`, `model.log`, `ipc.log`
-- [ ] **0.6.2** Tạo Prometheus metrics endpoint (`/metrics` tại port 9090):
+- [x] **0.6.2** Tạo Prometheus metrics endpoint (`/metrics` tại port 9090):
   - Counters: tick_received_total, bar_closed_total, prediction_made_total
   - Histograms: inference_latency_ms, ipc_latency_ms
   - Gauges: redis_memory_bytes, itq_queue_depth
-- [ ] **0.6.3** Viết `core/utils/timing.py` — decorator `@measure_latency`
+- [x] **0.6.3** Viết `core/utils/timing.py` — decorator `@measure_latency`
 
 ---
 
@@ -123,19 +123,19 @@
 
 ### 1.1 Cơ Sở Hạ Tầng Event Bus 🔴
 
-- [ ] **1.1.1** Thiết kế `core/events/bus.py` — Central Event Bus:
+- [x] **1.1.1** Thiết kế `core/events/bus.py` — Central Event Bus:
   - Pattern: asyncio-based pub/sub
   - Methods: `publish(event_type, payload)`, `subscribe(event_type, handler)`
   - Đảm bảo non-blocking với asyncio queues
-- [ ] **1.1.2** Định nghĩa `core/events/types.py` — tất cả event types:
+- [x] **1.1.2** Định nghĩa `core/events/types.py` — tất cả event types:
   - `BAR_CLOSE`, `TICK_RECEIVED`, `NEWS_ALERT`, `REGIME_CHANGE`
   - `OUTCOME_CONFIRMED`, `MODEL_DEGRADED`, `FEED_FAILURE`
-- [ ] **1.1.3** Unit tests: publish/subscribe, backpressure handling
+- [x] **1.1.3** Unit tests: publish/subscribe, backpressure handling
 - [ ] **1.1.4** Benchmark: đo throughput (target > 10,000 events/sec)
 
 ### 1.2 Tick Receiver — ZeroMQ 🔴
 
-- [ ] **1.2.1** Viết `core/ingestion/tick_receiver.py`:
+- [x] **1.2.1** Viết `core/ingestion/tick_receiver.py`:
   - ZeroMQ PULL socket trên port 5556
   - Deserialize TickFrame từ binary
   - Validate spread: `(ask - bid) > threshold` → ABNORMAL_SPREAD
@@ -144,7 +144,7 @@
   - Gửi Tick qua ZeroMQ PUSH socket
   - Fields: symbol, timestamp (microseconds), bid, ask, last, volume, flags
 - [ ] **1.2.3** Viết integration test: giả lập MT5 EA → verify nhận tick đúng
-- [ ] **1.2.4** Xử lý reconnect với exponential backoff (1s, 2s, 4s, ... max 60s)
+- [x] **1.2.4** Xử lý reconnect với exponential backoff (1s, 2s, 4s, ... max 60s)
 
 ### 1.3 Tick Receiver — TradingView Webhook 🟡
 
@@ -157,43 +157,43 @@
 
 ### 1.4 OHLCV Aggregator 🔴
 
-- [ ] **1.4.1** Viết `core/ingestion/ohlcv_aggregator.py`:
+- [x] **1.4.1** Viết `core/ingestion/ohlcv_aggregator.py`:
   - Tạo `ActiveBars` dict: `{timeframe: {bucket_time: BarState}}`
   - Hàm `update_bar(tick)`: cập nhật OHLCV cho tất cả 6 TF
   - Logic phát hiện đóng cửa nến: `current_time >= bucket + tf_seconds`
   - Phát `BAR_CLOSE(tf, ohlcv_record)` event khi nến đóng
-- [ ] **1.4.2** Implement Cascade Closure: M1 đóng → kiểm tra M5, M15, H1, H4, D1
-- [ ] **1.4.3** Unit tests với tick sequences giả lập:
+- [x] **1.4.2** Implement Cascade Closure: M1 đóng → kiểm tra M5, M15, H1, H4, D1
+- [x] **1.4.3** Unit tests với tick sequences giả lập:
   - Verify OHLCV chính xác cho từng TF
   - Verify thứ tự cascade closure đúng
-- [ ] **1.4.4** Edge case: tick đến muộn (out-of-order) — xử lý gracefully
+- [x] **1.4.4** Edge case: tick đến muộn (out-of-order) — xử lý gracefully
 
 ### 1.5 MTF Synchronizer & Leakage Guard 🔴
 
-- [ ] **1.5.1** Định nghĩa `UnifiedStateVector` dataclass:
+- [x] **1.5.1** Định nghĩa `UnifiedStateVector` dataclass:
   - `snapshot_time`, `bars` (dict 6 TF), `tick_context`, `volumetrics`, `leakage_guard`
-- [ ] **1.5.2** Implement `LeakageGuard`:
+- [x] **1.5.2** Implement `LeakageGuard`:
   - `forward_locked: Set[str]` — tập TF bị khóa trong backtest mode
   - Hàm `apply_guard(usv, current_timestamp)`: xác định TF nào cần lock
   - Khi TF bị lock: `bar_forming.close = None`
-- [ ] **1.5.3** Hàm `build_usv(tick)`: thu thập toàn bộ BarState → đóng gói USV
-- [ ] **1.5.4** Unit test Leakage Guard:
+- [x] **1.5.3** Hàm `build_usv(tick)`: thu thập toàn bộ BarState → đóng gói USV
+- [x] **1.5.4** Unit test Leakage Guard:
   - Verify không có look-ahead ở bất kỳ TF nào trong backtest mode
   - Property-based test với `hypothesis` library
 
 ### 1.6 Volumetrics Engine 🔴
 
-- [ ] **1.6.1** Viết `core/ingestion/volumetrics_engine.py`:
+- [x] **1.6.1** Viết `core/ingestion/volumetrics_engine.py`:
   - Tick Delta: phân loại buy/sell aggressor theo quy tắc bid/ask
   - CVD tích lũy theo nến: `CVD_t = Σ δ_i`
   - CVD chuẩn hóa: `CVD_norm = CVD / V_total`
   - CVD rolling windows: 5, 10, 20, 50 ticks
 - [ ] **1.6.2** Tính Order Book Imbalance (OBI) từ DOM data (nếu có)
-- [ ] **1.6.3** Tính Institutional Intensity Index (III):
+- [x] **1.6.3** Tính Institutional Intensity Index (III):
   - `III_t = (CVD_t / V_avg_30) × (|ΔP_t| / ATR_14)`
   - Cần ATR running calculator (Wilder's smoothing method)
-- [ ] **1.6.4** Tính Divergence Score: `DIV_CVD = sign(ΔP) × sign(CVD)`
-- [ ] **1.6.5** Unit test: verify CVD tích lũy đúng, III trong range hợp lý
+- [x] **1.6.4** Tính Divergence Score: `DIV_CVD = sign(ΔP) × sign(CVD)`
+- [x] **1.6.5** Unit test: verify CVD tích lũy đúng, III trong range hợp lý
 
 ### 1.7 Backtest Data Loader 🟡
 
@@ -207,8 +207,8 @@
 
 ### 1.8 Edge Cases & Fail-safes 🟡
 
-- [ ] **1.8.1** D.1: Mất kết nối ZeroMQ → `STALENESS_ALERT` flag, reconnect backoff
-- [ ] **1.8.2** D.2: Phát hiện News Spike (`|Δprice| > 3×ATR_5min`) → không update CVD, set `SPIKE_REGIME`
+- [x] **1.8.1** D.1: Mất kết nối ZeroMQ → `STALENESS_ALERT` flag, reconnect backoff
+- [x] **1.8.2** D.2: Phát hiện News Spike (`|Δprice| > 3×ATR_5min`) → không update CVD, set `SPIKE_REGIME`
 - [ ] **1.8.3** D.3: Timeframe Desync → nội suy tuyến tính (≤5 nến thiếu) hoặc mark UNRELIABLE
 - [ ] **1.8.4** D.4: ITQ Queue Overflow → Tick Sampling với K động
 - [ ] **1.8.5** Integration test toàn bộ Module 1: từ tick → USV hoàn chỉnh

@@ -1,44 +1,159 @@
 # =============================================================================
-# AGENTIC-QUANT — Ngưỡng vận hành hệ thống (System Thresholds)
+# AGENTIC-QUANT — Cau hinh he thong day du
+# =============================================================================
+system:
+  name: AGENTIC-QUANT
+  version: "0.1.0"
+  environment: development  # development | staging | production
+  symbol: XAUUSD
+  ports:
+    zmq_pull: 5556
+    zmq_pub: 5557
+    websocket: 47290
+    websocket_fallback_start: 47291
+    websocket_fallback_end: 47299
+    tv_webhook: 8080
+    prometheus: 9090
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    db: 0
+    maxmemory_mb: 512
+    ssl: false
+  vectordb:
+    provider: qdrant
+    url: http://127.0.0.1:6333
+  tick_thresholds:
+    tick_abnormal_spread_pips: 0.5
+    atr_period: 14
+    atr_tf_m1: 14
+    atr_tf_m5: 14
+    atr_tf_m15: 14
+    atr_tf_h1: 14
+    atr_tf_h4: 14
+    atr_tf_d1: 14
+  leaky_queue:
+    max_size: 10000
+    sample_threshold: 8000
+    k_dynamic_enabled: true
+  backtest_mode: false
+  forward_lock_enabled: true
+
+# =============================================================================
+# Killzone Sessions
+# =============================================================================
+killzones:
+  sessions:
+    - id: ASIAN
+      name: Asian Session
+      start_hour_utc: 22
+      start_minute_utc: 0
+      end_hour_utc: 7
+      end_minute_utc: 0
+      color: "#6B7280"
+      session_weight:
+        ltf: 0.5
+        htf: 1.0
+
+    - id: LONDON_OPEN_KZ
+      name: London Open Kill Zone
+      start_hour_utc: 7
+      start_minute_utc: 0
+      end_hour_utc: 8
+      end_minute_utc: 0
+      color: "#3B82F6"
+      session_weight:
+        ltf: 1.5
+        htf: 1.0
+
+    - id: LONDON
+      name: London Session
+      start_hour_utc: 7
+      start_minute_utc: 0
+      end_hour_utc: 11
+      end_minute_utc: 0
+      color: "#1D4ED8"
+      session_weight:
+        ltf: 1.0
+        htf: 1.2
+
+    - id: NY_OPEN_KZ
+      name: NY Open Kill Zone
+      start_hour_utc: 12
+      start_minute_utc: 0
+      end_hour_utc: 13
+      end_minute_utc: 0
+      color: "#EF4444"
+      session_weight:
+        ltf: 1.5
+        htf: 1.0
+
+    - id: NY_AM
+      name: NY Morning
+      start_hour_utc: 12
+      start_minute_utc: 0
+      end_hour_utc: 16
+      end_minute_utc: 0
+      color: "#B91C1C"
+      session_weight:
+        ltf: 1.0
+        htf: 1.2
+
+    - id: NY_PM
+      name: NY Afternoon
+      start_hour_utc: 16
+      start_minute_utc: 0
+      end_hour_utc: 20
+      end_minute_utc: 0
+      color: "#991B1B"
+      session_weight:
+        ltf: 0.8
+        htf: 1.0
+
+# =============================================================================
+# News Impact Weights
+# =============================================================================
+news_weights:
+  alpha: 0.4
+  impact_low: 0.2
+  impact_medium: 0.5
+  impact_high: 1.0
+  pre_news_window_seconds: 900
+  news_window_seconds: 300
+  post_news_lookback_seconds: 600
+  surprise_z_threshold: 2.0
+  pre_news_dampening: 0.3
+  news_window_dampening: 0.1
+  gamma_0: 0.3
+
+# =============================================================================
+# Ngưỡng vận hành (System Thresholds)
 # =============================================================================
 system_thresholds:
-  # --- Information Coefficient (IC) ---
   ic:
     good: 0.10
     warning: 0.05
-    critical: 0.05  # MODEL_DEGRADED trigger
-
-  # --- Brier Score ---
+    critical: 0.05
   brier_score:
     good: 0.20
     warning: 0.28
-    critical: 0.28  # MODEL_DEGRADED trigger
-
-  # --- ECE ---
+    critical: 0.28
   ece:
     good: 0.05
     warning: 0.08
-    critical: 0.08  # MODEL_DEGRADED trigger
-
-  # --- F1 Hold @ 0.70 threshold ---
+    critical: 0.08
   f1_hold:
     good: 0.65
     warning: 0.50
-    critical: 0.50  # MODEL_DEGRADED trigger
-
-  # --- Feature Drift Score (PSI) ---
+    critical: 0.50
   feature_drift_score:
     warning: 0.20
-    critical: 0.40  # MODEL_DEGRADED trigger
-
-  # --- IPC Latency ---
+    critical: 0.40
   ipc_latency_ms:
     good: 25
     warning: 50
-    critical: 50  # MODEL_DEGRADED trigger
-
-  # --- Redis Memory ---
+    critical: 50
   redis_memory_pct:
     good: 60
     warning: 80
-    critical: 80  # MODEL_DEGRADED trigger
+    critical: 80
