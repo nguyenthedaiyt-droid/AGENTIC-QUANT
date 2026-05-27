@@ -1,5 +1,5 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { NewsEvent, CountdownState, MacroRegime } from '@types/index'
+import type { NewsEvent, CountdownState, MacroRegime } from '../types/index'
 
 // --- macroSlice ---
 

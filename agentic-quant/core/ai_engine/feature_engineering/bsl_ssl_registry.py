@@ -21,8 +21,12 @@ import numpy as np
 
 from core.ai_engine.feature_engineering.types import Pivot, PivotTerm
 from core.ai_engine.feature_engineering.smc_detector import SwingPointDetector
-from core.memory.short_term.active_zone_registry import ActiveZoneRegistry
-from core.memory.short_term.redis_cache_manager import RedisCacheManager
+# Optimized imports - avoid circular deps
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.memory.short_term.active_zone_registry import ActiveZoneRegistry
+    from core.memory.short_term.redis_cache_manager import RedisCacheManager
 
 
 _MAX_CLAIMED_WINDOW = 50
